@@ -56,6 +56,15 @@ router.post('/register', [
     { expiresIn: process.env.JWT_EXPIRE }
   )
 
+  // Set HttpOnly cookie for automatic auth in proxy
+  res.cookie('token', token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    path: '/',
+    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+  })
+
   res.status(201).json({
     success: true,
     message: 'User registered successfully',
@@ -117,6 +126,15 @@ router.post('/login', [
   userDoc.last_login = new Date()
   await userDoc.save()
 
+  // Set HttpOnly cookie for automatic auth in proxy
+  res.cookie('token', token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    path: '/',
+    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+  })
+
   res.json({
     success: true,
     message: 'Login successful',
@@ -131,6 +149,16 @@ router.post('/login', [
     }
   })
 }))
+
+// Logout: clear cookie
+router.post('/logout', async (req, res) => {
+  try {
+    res.clearCookie('token', { path: '/' })
+    return res.json({ success: true, message: 'Logged out' })
+  } catch (e) {
+    return res.status(500).json({ success: false, message: 'Logout failed' })
+  }
+})
 
 // Get current user
 router.get('/me', asyncHandler(async (req, res) => {

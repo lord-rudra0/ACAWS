@@ -3,6 +3,25 @@ import * as faceapi from 'face-api.js'
 import { Matrix } from 'ml-matrix'
 import * as brain from 'brain.js'
 
+// Resolve backend base: if proxy enabled, route via Express to avoid JWT in browser
+const env = typeof import.meta !== 'undefined' ? (import.meta.env || {}) : {}
+const USE_PROXY = String(env.VITE_USE_PY_PROXY || '').toLowerCase() === 'true'
+const EXPRESS_API = env.VITE_API_URL
+// Python backend base URL: prefer VITE_PYTHON_API_URL, then VITE_PY_BACKEND_URL, else localhost
+const DIRECT_PY = env.VITE_PYTHON_API_URL || env.VITE_PY_BACKEND_URL || 'http://localhost:5000'
+const PY_BACKEND = USE_PROXY && EXPRESS_API ? `${EXPRESS_API}/api/python` : DIRECT_PY
+
+function getAuthHeader() {
+  // When using proxy, skip adding Authorization from browser; Express will inject from cookie/header
+  if (USE_PROXY) return {}
+  try {
+    const token = localStorage.getItem('token') || localStorage.getItem('auth_token')
+    return token ? { Authorization: `Bearer ${token}` } : {}
+  } catch {
+    return {}
+  }
+}
+
 class AdvancedMLService {
   constructor() {
     this.models = {
@@ -190,7 +209,7 @@ class AdvancedMLService {
   async createPerformanceModel() {
     const model = tf.sequential({
       layers: [
-        tf.layers.dense({ inputShape: [15], units: 256, activation: 'relu' }),
+        tf.layers.dense({ inputShape: [14], units: 256, activation: 'relu' }),
         tf.layers.batchNormalization(),
         tf.layers.dropout({ rate: 0.4 }),
         tf.layers.dense({ units: 128, activation: 'relu' }),
@@ -271,6 +290,11 @@ class AdvancedMLService {
     await this.initialize()
     
     try {
+      // 1) Try Python backend for real model result
+      const pyRes = await this._pyAnalyzeEmotion(imageData)
+      if (pyRes) return pyRes
+
+      // 2) Fallback to local analysis if backend unavailable
       // Use face-api.js for detailed facial analysis
       const img = await this.loadImageFromData(imageData)
       const detections = await faceapi
@@ -311,6 +335,38 @@ class AdvancedMLService {
     } catch (error) {
       console.error('Advanced emotion analysis failed:', error)
       return this.getFallbackEmotionAnalysis()
+    }
+  }
+
+  async _pyAnalyzeEmotion(imageData) {
+    try {
+      const resp = await fetch(`${PY_BACKEND}/api/emotion/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+        credentials: USE_PROXY ? 'include' : 'same-origin',
+        body: JSON.stringify({ frame: imageData, timestamp: new Date().toISOString() })
+      })
+      if (!resp.ok) return null
+      const json = await resp.json()
+      const data = json?.data || json
+      if (!data) return null
+      // Normalize to local structure
+      // If server returns single label, map to distribution
+      let emotions = data.emotions || data.expressions
+      if (!emotions && data.emotion) {
+        emotions = { [String(data.emotion).toLowerCase()]: 1.0 }
+      }
+      return {
+        emotions: emotions || { neutral: 1.0 },
+        confidence: typeof data.confidence === 'number' ? data.confidence : 0.0,
+        facialLandmarks: data.facialLandmarks || null,
+        advancedMetrics: data.advancedMetrics || null,
+        microExpressions: data.microExpressions || null,
+        emotionIntensity: data.emotionIntensity || null,
+        timestamp: new Date().toISOString()
+      }
+    } catch {
+      return null
     }
   }
 
@@ -365,11 +421,36 @@ class AdvancedMLService {
 
   analyzeMicroMovements(landmarks) {
     // Analyze subtle movements that indicate emotional state
+    // Derive simple deterministic proxies from geometric distances
+    const leftBrow = landmarks.slice(17, 22)
+    const rightBrow = landmarks.slice(22, 27)
+    const leftEye = landmarks.slice(36, 42)
+    const rightEye = landmarks.slice(42, 48)
+    const mouthLeft = landmarks[48]
+    const mouthRight = landmarks[54]
+    const noseLeft = landmarks[31]
+    const noseRight = landmarks[35]
+    const jawTop = landmarks[8] // chin
+
+    const eyeCenterY = (leftEye.reduce((s, p) => s + p.y, 0) / leftEye.length + rightEye.reduce((s, p) => s + p.y, 0) / rightEye.length) / 2
+    const leftBrowY = leftBrow.reduce((s, p) => s + p.y, 0) / leftBrow.length
+    const rightBrowY = rightBrow.reduce((s, p) => s + p.y, 0) / rightBrow.length
+    const eyebrowLift = Math.max(0, (eyeCenterY - (leftBrowY + rightBrowY) / 2) / 50)
+
+    const mouthWidth = Math.hypot(mouthRight.x - mouthLeft.x, mouthRight.y - mouthLeft.y)
+    const faceWidth = Math.hypot(noseRight.x - noseLeft.x, noseRight.y - noseLeft.y)
+    const mouthCornerMovement = Math.max(0, Math.min(1, (mouthWidth / (faceWidth || 1)) - 1))
+
+    const nostrilFlare = Math.max(0, Math.min(1, (faceWidth - 30) / 50))
+
+    const jawDistance = Math.hypot(jawTop.x - mouthLeft.x, jawTop.y - mouthLeft.y)
+    const jawTension = Math.max(0, Math.min(1, (jawDistance - 40) / 80))
+
     return {
-      eyebrowMovement: Math.random() * 0.5,
-      mouthCornerMovement: Math.random() * 0.3,
-      nostrilFlare: Math.random() * 0.2,
-      jawTension: Math.random() * 0.4
+      eyebrowMovement: Math.min(1, eyebrowLift),
+      mouthCornerMovement,
+      nostrilFlare,
+      jawTension
     }
   }
 
@@ -402,12 +483,12 @@ class AdvancedMLService {
   async detectMicroExpressions(detection) {
     // Detect brief, involuntary facial expressions
     const landmarks = detection.landmarks.positions
-    
+    // Without temporal analysis, avoid random detection; return conservative nulls
     return {
-      detected: Math.random() < 0.3,
-      type: ['surprise', 'contempt', 'confusion'][Math.floor(Math.random() * 3)],
-      intensity: Math.random() * 0.5,
-      duration: Math.random() * 200 + 50 // 50-250ms
+      detected: false,
+      type: null,
+      intensity: 0,
+      duration: 0
     }
   }
 
@@ -426,14 +507,29 @@ class AdvancedMLService {
     await this.initialize()
     
     try {
+      // 1) Try Python backend for real model result (returns score + confidence)
+      const pyRes = await this._pyTrackAttention(imageData)
+      
+      // 2) Optionally augment with local landmark-based details for UI
       const img = await this.loadImageFromData(imageData)
       const detections = await faceapi
         .detectAllFaces(img, new faceapi.TinyFaceDetectorOptions())
         .withFaceLandmarks()
 
-      if (detections.length === 0) {
-        return this.getFallbackAttentionAnalysis()
+      if (detections.length === 0 && pyRes) {
+        // If backend gave a value but no local landmarks, return minimal structure using backend score
+        return {
+          attentionScore: Math.round((pyRes.attention ?? 0) * 100),
+          gazeAnalysis: { direction: null, onScreen: null, confidence: pyRes.confidence ?? 0 },
+          headPose: { yaw: null, pitch: null, roll: null, facingCamera: null },
+          eyeMetrics: { blinkRate: 0, eyeAspectRatio: null },
+          focusMap: null,
+          cognitiveLoad: null,
+          engagementLevel: null,
+          distractionIndicators: []
+        }
       }
+      if (detections.length === 0) return this.getFallbackAttentionAnalysis()
 
       const detection = detections[0]
       const landmarks = detection.landmarks.positions
@@ -453,8 +549,10 @@ class AdvancedMLService {
       // Cognitive load assessment
       const cognitiveLoad = await this.assessCognitiveLoad(eyeMetrics, headPose)
       
+      const localScore = this.calculateAttentionScore(gazeAnalysis, headPose, eyeMetrics)
+      const finalScore = pyRes && typeof pyRes.attention === 'number' ? Math.round(pyRes.attention * 100) : localScore
       return {
-        attentionScore: this.calculateAttentionScore(gazeAnalysis, headPose, eyeMetrics),
+        attentionScore: finalScore,
         gazeAnalysis,
         headPose,
         eyeMetrics,
@@ -467,6 +565,24 @@ class AdvancedMLService {
     } catch (error) {
       console.error('Advanced attention analysis failed:', error)
       return this.getFallbackAttentionAnalysis()
+    }
+  }
+
+  async _pyTrackAttention(imageData) {
+    try {
+      const resp = await fetch(`${PY_BACKEND}/api/attention/track`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+        credentials: USE_PROXY ? 'include' : 'same-origin',
+        body: JSON.stringify({ frame: imageData, timestamp: new Date().toISOString() })
+      })
+      if (!resp.ok) return null
+      const json = await resp.json()
+      const data = json?.data || json
+      if (!data) return null
+      return { attention: data.attention, confidence: data.confidence }
+    } catch {
+      return null
     }
   }
 
@@ -484,12 +600,13 @@ class AdvancedMLService {
       y: (leftEyeCenter.y + rightEyeCenter.y) / 2
     }
     
+    const onScreen = this.isGazeOnScreen(gazeVector)
     return {
       direction: this.categorizeGazeDirection(gazeVector),
       coordinates: gazeVector,
       confidence: 0.8,
-      onScreen: this.isGazeOnScreen(gazeVector),
-      fixationStability: Math.random() * 0.5 + 0.5
+      onScreen,
+      fixationStability: onScreen ? 0.8 : 0.4
     }
   }
 
@@ -553,16 +670,16 @@ class AdvancedMLService {
     // Detect blinks
     const blinkDetected = avgEAR < 0.25
     
-    // Calculate pupil dilation (mock)
-    const pupilDilation = Math.random() * 0.3 + 0.7
+    // Deterministic proxy for pupil dilation: inverse relation to EAR (very rough)
+    const pupilDilation = Math.max(0.5, Math.min(1.0, 1.2 - avgEAR))
     
     return {
       eyeAspectRatio: avgEAR,
       blinkDetected,
       blinkRate: this.calculateBlinkRate(),
       pupilDilation,
-      eyeMovementVelocity: Math.random() * 10,
-      saccadeFrequency: Math.random() * 5 + 2
+      eyeMovementVelocity: 0, // single-frame metric not available; avoid randoms
+      saccadeFrequency: 0 // requires temporal data; avoid randoms
     }
   }
 
@@ -576,18 +693,18 @@ class AdvancedMLService {
   }
 
   calculateBlinkRate() {
-    // Mock blink rate calculation
-    return Math.random() * 10 + 10 // 10-20 blinks per minute
+    // Without temporal series, return 0 to avoid fabricating data
+    return 0
   }
 
   async generateFocusMap(gazeAnalysis, headPose) {
     // Generate attention focus heatmap
     const focusRegions = {
-      center: gazeAnalysis.direction === 'center' ? 0.9 : 0.1,
-      left: gazeAnalysis.direction === 'left' ? 0.8 : 0.1,
-      right: gazeAnalysis.direction === 'right' ? 0.8 : 0.1,
-      top: gazeAnalysis.direction === 'up' ? 0.7 : 0.1,
-      bottom: gazeAnalysis.direction === 'down' ? 0.6 : 0.1
+      center: gazeAnalysis.direction === 'center' ? 1.0 : 0.0,
+      left: gazeAnalysis.direction === 'left' ? 1.0 : 0.0,
+      right: gazeAnalysis.direction === 'right' ? 1.0 : 0.0,
+      top: gazeAnalysis.direction === 'up' ? 1.0 : 0.0,
+      bottom: gazeAnalysis.direction === 'down' ? 1.0 : 0.0
     }
     
     return {
@@ -733,7 +850,7 @@ class AdvancedMLService {
       }
 
       let brainScore = null
-      if (brainNet && typeof brainNet.run === 'function') {
+      if (this.isBrainRunnable(brainNet)) {
         try {
           // brain.js expects normalized input; we pass features vector directly
           brainScore = brainNet.run(features)
@@ -976,9 +1093,10 @@ class AdvancedMLService {
   }
 
   getFallbackEmotionAnalysis() {
+    // Avoid fabricating emotions; return minimal neutral-only when no data
     return {
-      emotions: { neutral: 0.7, happy: 0.2, focused: 0.1 },
-      confidence: 0.5,
+      emotions: { neutral: 1.0 },
+      confidence: 0.0,
       facialLandmarks: null,
       advancedMetrics: null,
       timestamp: new Date().toISOString()
@@ -986,14 +1104,13 @@ class AdvancedMLService {
   }
 
   getFallbackAttentionAnalysis() {
+    // Avoid synthetic values; indicate unavailable metrics explicitly
     return {
-      attentionScore: 75,
-      gazeAnalysis: { direction: 'center', onScreen: true, confidence: 0.5 },
-      headPose: { yaw: 0, pitch: 0, roll: 0, facingCamera: true },
-      eyeMetrics: { blinkRate: 15, eyeAspectRatio: 0.3 },
-      focusMap: { regions: { center: 0.8 }, primaryFocus: 'center' },
-      cognitiveLoad: { level: 0.5, category: 'medium' },
-      timestamp: new Date().toISOString()
+      attentionScore: null,
+      gazeAnalysis: { direction: null, onScreen: null, confidence: 0 },
+      headPose: { yaw: null, pitch: null, roll: null, facingCamera: null },
+      eyeMetrics: { blinkRate: 0, eyeAspectRatio: null },
+      focusMap: null
     }
   }
 

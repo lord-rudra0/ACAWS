@@ -16,6 +16,7 @@ import analyticsRoutes from './routes/analytics.js'
 import communityRoutes from './routes/community.js'
 import adminRoutes from './routes/admin.js'
 import aiRoutes from './routes/ai.js'
+import pythonProxyRoutes from './routes/pythonProxy.js'
 
 // Import middleware
 import { authenticateToken } from './middleware/auth.js'
@@ -28,9 +29,12 @@ dotenv.config()
 
 const app = express()
 const server = createServer(app)
+const corsOriginsEnv = process.env.EXPRESS_CORS_ORIGINS || 'http://localhost:3000,http://localhost:5173'
+const corsOriginsArr = corsOriginsEnv.split(',').map(o => o.trim()).filter(Boolean)
+
 const io = new Server(server, {
   cors: {
-    origin: process.env.NODE_ENV === 'production' ? 'https://your-domain.com' : 'http://localhost:3000',
+    origin: corsOriginsArr,
     methods: ['GET', 'POST']
   }
 })
@@ -49,7 +53,7 @@ const limiter = rateLimit({
 // Middleware
 app.use(helmet())
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' ? 'https://your-domain.com' : 'http://localhost:3000',
+  origin: corsOriginsArr,
   credentials: true
 }))
 app.use(morgan('combined'))
@@ -66,6 +70,8 @@ app.use('/api/analytics', authenticateToken, analyticsRoutes)
 app.use('/api/community', authenticateToken, communityRoutes)
 app.use('/api/admin', authenticateToken, adminRoutes)
 app.use('/api/ai', authenticateToken, aiRoutes)
+// Python backend proxy (no auth middleware; proxy injects token from header/cookie)
+app.use('/api/python', pythonProxyRoutes)
 
 // Health check endpoint
 app.get('/health', (req, res) => {
