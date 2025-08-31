@@ -35,6 +35,7 @@ MANIFEST
 debug.log
 pip-log.txt
 pip-delete-this-directory.txt
+*.log
 
 # Unit test / coverage reports
 htmlcov/
@@ -84,3 +85,4 @@ cython_debug/
 # Environment variables
 .env
 .env.*
+
