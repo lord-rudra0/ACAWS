@@ -7,7 +7,10 @@ from dotenv import load_dotenv
 import logging
 from contextlib import asynccontextmanager
 
-# Minimal boot flag
+# Load environment variables early so MINIMAL_BOOT reflects .env
+load_dotenv()
+
+# Minimal boot flag (now respects .env)
 MINIMAL_BOOT = os.getenv("MINIMAL_BOOT", "false").lower() == "true"
 
 # Conditional imports to avoid heavy deps in minimal mode
@@ -41,9 +44,7 @@ else:
 from api.routes import emotion_router, attention_router, learning_router, wellness_router, analytics_router
 from core.websocket_manager import WebSocketManager
 from core.auth import verify_token
-
-# Load environment variables
-load_dotenv()
+from database.logger import log_emotion, log_attention, log_fatigue
 
 # Configure logging
 logging.basicConfig(
@@ -151,6 +152,20 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     # Detect fatigue
                     fatigue_result = await fatigue_service.detect_fatigue(frame_data)
                     
+                    # Persist all results (no auth context on WS; use session_id=client_id)
+                    try:
+                        await log_emotion(user_id=None, payload=emotion_result, session_id=client_id, source="websocket")
+                    except Exception as e:
+                        logger.error(f"WS log_emotion failed: {e}")
+                    try:
+                        await log_attention(user_id=None, payload=attention_result, session_id=client_id, source="websocket")
+                    except Exception as e:
+                        logger.error(f"WS log_attention failed: {e}")
+                    try:
+                        await log_fatigue(user_id=None, payload=fatigue_result, session_id=client_id, source="websocket")
+                    except Exception as e:
+                        logger.error(f"WS log_fatigue failed: {e}")
+
                     # Send results back
                     await websocket_manager.send_personal_message({
                         "type": "analysis_result",

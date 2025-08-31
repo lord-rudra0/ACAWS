@@ -303,6 +303,15 @@ export const wellnessAPI = {
     } catch (error) {
       throw new Error(error.message || 'Failed to load mood analytics')
     }
+  },
+
+  saveDailySummary: async (summaryData) => {
+    try {
+      const response = await expressAPI.post('/api/wellness/daily-summary', summaryData)
+      return response.data
+    } catch (error) {
+      throw new Error(error.message || 'Failed to save daily wellness summary')
+    }
   }
 }
 

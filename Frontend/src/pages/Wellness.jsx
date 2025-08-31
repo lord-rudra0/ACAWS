@@ -18,6 +18,8 @@ import {
   Target
 } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
+import { wellnessAPI } from '../services/api'
+import enhancedAnalyticsService from '../services/enhancedAnalytics'
 
 const Wellness = () => {
   const [currentMood, setCurrentMood] = useState(null)
@@ -31,15 +33,20 @@ const Wellness = () => {
     count: 4
   })
 
-  const [wellnessData] = useState([
-    { day: 'Mon', mood: 7, stress: 4, energy: 8, focus: 85 },
-    { day: 'Tue', mood: 6, stress: 6, energy: 6, focus: 70 },
-    { day: 'Wed', mood: 8, stress: 3, energy: 9, focus: 95 },
-    { day: 'Thu', mood: 7, stress: 5, energy: 7, focus: 80 },
-    { day: 'Fri', mood: 9, stress: 2, energy: 8, focus: 90 },
-    { day: 'Sat', mood: 8, stress: 3, energy: 9, focus: 85 },
-    { day: 'Sun', mood: 7, stress: 4, energy: 8, focus: 88 }
-  ])
+  const [wellnessData, setWellnessData] = useState([])
+  const [wellnessScore, setWellnessScore] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [breakStartTime, setBreakStartTime] = useState(null)
+
+  // AI/Analytics derived state
+  const [tipsLoading, setTipsLoading] = useState(false)
+  const [tipsError, setTipsError] = useState(null)
+  const [aiTips, setAiTips] = useState([])
+  const [dailyGoals, setDailyGoals] = useState([])
+  const [goalsLoading, setGoalsLoading] = useState(false)
+  const [summary, setSummary] = useState({ sessions: null, goalsAchieved: null, goalsTotal: null, avgFocus: null })
+  const [dailySaved, setDailySaved] = useState(false)
 
   const moods = [
     { icon: Smile, label: 'Great', value: 5, color: 'text-green-500' },
@@ -79,6 +86,147 @@ const Wellness = () => {
       action: () => showHydrationReminder()
     }
   ]
+
+  useEffect(() => {
+    // Fetch wellness analytics on mount
+    const fetchWellness = async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const [insights, moodAnalytics, history] = await Promise.all([
+          wellnessAPI.getInsights().catch(() => null),
+          wellnessAPI.getMoodAnalytics('week').catch(() => null),
+          wellnessAPI.getHistory(7).catch(() => null)
+        ])
+
+        // Wellness Score
+        const score = insights?.wellnessScore ?? insights?.score ?? insights?.overallScore ?? null
+        if (typeof score === 'number') setWellnessScore(Math.round(score))
+
+        // Stress/Energy current state from latest history if present
+        const latest = Array.isArray(history?.entries) && history.entries.length > 0
+          ? history.entries[0]
+          : null
+        if (latest?.stress) setStressLevel(Math.min(10, Math.max(1, Math.round(latest.stress))))
+        if (latest?.energy) setEnergyLevel(Math.min(10, Math.max(1, Math.round(latest.energy))))
+
+        // Weekly trend data
+        const toDayLabel = (dStr) => {
+          try {
+            const d = new Date(dStr)
+            return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()]
+          } catch {
+            return dStr?.slice(0,3) || ''
+          }
+        }
+
+        let trend = []
+        if (Array.isArray(moodAnalytics?.daily)) {
+          trend = moodAnalytics.daily.map(d => ({
+            day: toDayLabel(d.date || d.day),
+            mood: Math.round(d.mood || d.averageMood || 0),
+            stress: Math.round(d.stress || d.averageStress || 0),
+            energy: Math.round(d.energy || d.averageEnergy || 0),
+            focus: Math.round(d.focus || d.averageFocus || 0)
+          }))
+        } else if (Array.isArray(history?.entries)) {
+          // Fallback from raw history grouped by day (show last 7 items)
+          trend = history.entries.slice(0,7).map(e => ({
+            day: toDayLabel(e.date || e.timestamp),
+            mood: Math.round(e.mood || 0),
+            stress: Math.round(e.stress || 0),
+            energy: Math.round(e.energy || 0),
+            focus: Math.round(e.focus || e.attention || 0)
+          }))
+        }
+        if (trend.length > 0) setWellnessData(trend)
+
+      } catch (err) {
+        setError(err?.message || 'Failed to load wellness data')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchWellness()
+  }, [])
+
+  // Fetch AI tips/recommendations and daily goals/summary
+  useEffect(() => {
+    const fetchAIAndGoals = async () => {
+      setTipsLoading(true)
+      setGoalsLoading(true)
+      setTipsError(null)
+      try {
+        const report = await enhancedAnalyticsService.generateComprehensiveReport('me', 'today', true)
+
+        // Tips from AI insights and recommendations
+        const recs = Array.isArray(report?.recommendations) ? report.recommendations : []
+        const aiAdvice = Array.isArray(report?.aiInsights?.personalizedAdvice) ? report.aiInsights.personalizedAdvice : []
+        const merged = [...recs, ...aiAdvice]
+          .map((r, idx) => (typeof r === 'string' ? { id: `tip-${idx}`, text: r } : { id: r.id || `tip-${idx}`, text: r.text || r.recommendation || r.title || '' }))
+          .filter(t => t.text)
+          .slice(0, 6)
+        setAiTips(merged)
+
+        // Daily goals (mocked from analytics but shaped as goals)
+        const wellness = report?.wellnessAnalytics || {}
+        const learning = report?.learningAnalytics || {}
+
+        const goals = [
+          { label: 'Mood Check-ins', current: Math.min(3, Math.round((wellness.moodVariability || 1))), target: 3 },
+          { label: 'Break Sessions', current: Math.min(4, Math.round((wellness.stressSpikes || 0) + 1)), target: 4 },
+          { label: 'Breathing Exercises', current: Math.min(2, Math.round(((10 - (wellness.averageStressLevel || 5)) / 5))), target: 2 },
+          { label: 'Hydration Reminders', current: Math.min(8, 4 + Math.round((wellness.averageEnergyLevel || 6) / 2)), target: 8 }
+        ].map(g => ({ ...g, completed: g.current >= g.target }))
+        setDailyGoals(goals)
+
+        // Today's summary
+        const sessions = Math.max(1, Math.round((learning.consistencyScore || 60) / 20))
+        const goalsAchieved = goals.filter(g => g.completed).length
+        const goalsTotal = goals.length
+        const avgFocus = Math.round((report?.cognitiveAnalytics?.averageAttention || 75))
+        const computedSummary = { sessions, goalsAchieved, goalsTotal, avgFocus }
+        setSummary(computedSummary)
+
+        // Persist daily wellness summary once per load
+        if (!dailySaved) {
+          try {
+            // Build payload and only include numeric fields when valid
+            const payload = {
+              date: new Date().toISOString().slice(0, 10),
+              sessions: computedSummary.sessions,
+              goals: goals.map(g => ({ label: g.label, current: g.current, target: g.target, completed: g.completed })),
+              goals_achieved: computedSummary.goalsAchieved,
+              goals_total: computedSummary.goalsTotal,
+              avg_focus: computedSummary.avgFocus,
+              tips_sample: merged.slice(0, 3).map(t => t.text),
+              meta: {
+                source: 'frontend_enhanced_analytics',
+                generated_at: new Date().toISOString()
+              }
+            }
+
+            if (typeof wellnessScore === 'number' && Number.isFinite(wellnessScore)) {
+              payload.wellness_score = wellnessScore
+            }
+
+            await wellnessAPI.saveDailySummary(payload)
+            setDailySaved(true)
+          } catch (persistErr) {
+            console.warn('Failed to persist daily summary:', persistErr)
+          }
+        }
+      } catch (e) {
+        setTipsError(e?.message || 'Failed to load AI tips and goals')
+      } finally {
+        setTipsLoading(false)
+        setGoalsLoading(false)
+      }
+    }
+
+    fetchAIAndGoals()
+  }, [])
 
   useEffect(() => {
     let interval
@@ -122,10 +270,28 @@ const Wellness = () => {
     return () => clearInterval(interval)
   }, [breathingExercise.active])
 
-  const recordMood = (mood) => {
-    setCurrentMood(mood)
-    // Here you would save to backend
-    console.log('Mood recorded:', mood)
+  const recordMood = async (mood) => {
+    try {
+      setCurrentMood(mood)
+      // Backend expects integers 1–10 for these fields
+      const recordRes = await wellnessAPI.recordEntry({
+        mood_score: mood.value,
+        stress_level: Math.min(10, Math.max(1, parseInt(stressLevel))),
+        energy_level: Math.min(10, Math.max(1, parseInt(energyLevel))),
+        // Optional fields supported by backend schema
+        notes: `Mood: ${mood.label}`
+      })
+      // Set score immediately from entry response
+      if (recordRes?.entry?.wellness_score != null) {
+        setWellnessScore(Math.round(recordRes.entry.wellness_score))
+      }
+      // Refresh insights/score after recording (secondary)
+      const insights = await wellnessAPI.getInsights().catch(() => null)
+      const score = insights?.wellnessScore ?? insights?.score ?? insights?.overallScore ?? null
+      if (typeof score === 'number') setWellnessScore(Math.round(score))
+    } catch (err) {
+      setError(err?.message || 'Failed to record mood')
+    }
   }
 
   const startBreathingExercise = () => {
@@ -151,10 +317,42 @@ const Wellness = () => {
   const startMindfulBreak = () => {
     setIsBreakActive(true)
     setBreakTimer(0)
+    setBreakStartTime(new Date().toISOString())
   }
 
   const showHydrationReminder = () => {
     alert('💧 Time to hydrate! Drink a glass of water.')
+  }
+
+  const handleToggleBreak = async () => {
+    if (isBreakActive) {
+      // Pausing -> record break
+      try {
+        if (breakTimer > 0) {
+          await wellnessAPI.recordBreak({
+            duration_seconds: breakTimer,
+            started_at: breakStartTime,
+            ended_at: new Date().toISOString(),
+            type: 'mindful_break'
+          })
+        }
+      } catch (err) {
+        setError(err?.message || 'Failed to record break')
+      } finally {
+        setIsBreakActive(false)
+        setBreakStartTime(null)
+      }
+    } else {
+      startMindfulBreak()
+    }
+  }
+
+  const getScoreLabel = (score) => {
+    if (score == null) return '—'
+    if (score >= 85) return 'Excellent'
+    if (score >= 70) return 'Good'
+    if (score >= 55) return 'Fair'
+    return 'Needs Care'
   }
 
   const formatTime = (seconds) => {
@@ -191,6 +389,11 @@ const Wellness = () => {
               <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-6">
                 How are you feeling today?
               </h2>
+              {error && (
+                <div className="mb-4 bg-red-50 dark:bg-red-900/20 p-3 rounded-lg border border-red-200 dark:border-red-700 text-sm text-red-700 dark:text-red-200">
+                  {error}
+                </div>
+              )}
               
               <div className="grid grid-cols-5 gap-4 mb-6">
                 {moods.map((mood) => {
@@ -310,43 +513,46 @@ const Wellness = () => {
               <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-6">
                 Weekly Wellness Trends
               </h2>
-              
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={wellnessData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                  <XAxis dataKey="day" stroke="#6B7280" />
-                  <YAxis stroke="#6B7280" />
-                  <Tooltip 
-                    contentStyle={{
-                      backgroundColor: '#1F2937',
-                      border: 'none',
-                      borderRadius: '8px',
-                      color: 'white'
-                    }}
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="mood" 
-                    stroke="#10B981" 
-                    strokeWidth={3}
-                    name="Mood"
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="energy" 
-                    stroke="#3B82F6" 
-                    strokeWidth={3}
-                    name="Energy"
-                  />
-                  <Line 
-                    type="monotone" 
-                    dataKey="stress" 
-                    stroke="#EF4444" 
-                    strokeWidth={3}
-                    name="Stress"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+              {loading ? (
+                <div className="h-[300px] w-full bg-gray-100 dark:bg-gray-700 rounded-xl animate-pulse" />
+              ) : (
+                <ResponsiveContainer width="100%" height={300}>
+                  <LineChart data={wellnessData && wellnessData.length ? wellnessData : []}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                    <XAxis dataKey="day" stroke="#6B7280" />
+                    <YAxis stroke="#6B7280" />
+                    <Tooltip 
+                      contentStyle={{
+                        backgroundColor: '#1F2937',
+                        border: 'none',
+                        borderRadius: '8px',
+                        color: 'white'
+                      }}
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="mood" 
+                      stroke="#10B981" 
+                      strokeWidth={3}
+                      name="Mood"
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="energy" 
+                      stroke="#3B82F6" 
+                      strokeWidth={3}
+                      name="Energy"
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="stress" 
+                      stroke="#EF4444" 
+                      strokeWidth={3}
+                      name="Stress"
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
             </motion.div>
           </div>
 
@@ -361,8 +567,8 @@ const Wellness = () => {
               <div className="text-center">
                 <Heart className="w-12 h-12 mx-auto mb-4" />
                 <h3 className="text-lg font-semibold mb-2">Wellness Score</h3>
-                <div className="text-4xl font-bold mb-2">87</div>
-                <div className="text-green-100">Excellent</div>
+                <div className="text-4xl font-bold mb-2">{loading ? '…' : (wellnessScore ?? '—')}</div>
+                <div className="text-green-100">{getScoreLabel(wellnessScore)}</div>
               </div>
             </motion.div>
 
@@ -388,7 +594,7 @@ const Wellness = () => {
 
               <div className="flex space-x-2">
                 <button
-                  onClick={() => setIsBreakActive(!isBreakActive)}
+                  onClick={handleToggleBreak}
                   className="flex-1 btn-primary flex items-center justify-center space-x-2"
                 >
                   {isBreakActive ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
@@ -398,6 +604,7 @@ const Wellness = () => {
                   onClick={() => {
                     setIsBreakActive(false)
                     setBreakTimer(0)
+                    setBreakStartTime(null)
                   }}
                   className="p-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors"
                 >
@@ -456,29 +663,31 @@ const Wellness = () => {
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
                 Daily Wellness Goals
               </h3>
-              
-              <div className="space-y-4">
-                {[
-                  { label: 'Mood Check-ins', current: 3, target: 3, completed: true },
-                  { label: 'Break Sessions', current: 2, target: 4, completed: false },
-                  { label: 'Breathing Exercises', current: 1, target: 2, completed: false },
-                  { label: 'Hydration Reminders', current: 6, target: 8, completed: false }
-                ].map((goal, index) => (
-                  <div key={index} className="flex items-center justify-between">
-                    <div className="flex items-center space-x-3">
-                      <div className={`w-4 h-4 rounded-full ${
-                        goal.completed ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
-                      }`}></div>
-                      <span className="text-gray-900 dark:text-white font-medium">
-                        {goal.label}
+              {goalsLoading ? (
+                <div className="space-y-3">
+                  {[...Array(4)].map((_, i) => (
+                    <div key={i} className="h-6 bg-gray-100 dark:bg-gray-700 rounded animate-pulse" />
+                  ))}
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {dailyGoals.map((goal, index) => (
+                    <div key={index} className="flex items-center justify-between">
+                      <div className="flex items-center space-x-3">
+                        <div className={`w-4 h-4 rounded-full ${
+                          goal.completed ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
+                        }`}></div>
+                        <span className="text-gray-900 dark:text-white font-medium">
+                          {goal.label}
+                        </span>
+                      </div>
+                      <span className="text-sm text-gray-600 dark:text-gray-400">
+                        {goal.current}/{goal.target}
                       </span>
                     </div>
-                    <span className="text-sm text-gray-600 dark:text-gray-400">
-                      {goal.current}/{goal.target}
-                    </span>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </motion.div>
           </div>
 
@@ -493,32 +702,39 @@ const Wellness = () => {
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
                 Today's Summary
               </h3>
-              
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <Calendar className="w-4 h-4 text-primary-500" />
-                    <span className="text-gray-600 dark:text-gray-400">Study Sessions</span>
-                  </div>
-                  <span className="font-semibold text-gray-900 dark:text-white">4</span>
+              {goalsLoading ? (
+                <div className="space-y-3">
+                  {[...Array(3)].map((_, i) => (
+                    <div key={i} className="h-6 bg-gray-100 dark:bg-gray-700 rounded animate-pulse" />
+                  ))}
                 </div>
-                
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <Target className="w-4 h-4 text-success-500" />
-                    <span className="text-gray-600 dark:text-gray-400">Goals Achieved</span>
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <Calendar className="w-4 h-4 text-primary-500" />
+                      <span className="text-gray-600 dark:text-gray-400">Study Sessions</span>
+                    </div>
+                    <span className="font-semibold text-gray-900 dark:text-white">{summary.sessions ?? '—'}</span>
                   </div>
-                  <span className="font-semibold text-gray-900 dark:text-white">3/4</span>
-                </div>
-                
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <TrendingUp className="w-4 h-4 text-blue-500" />
-                    <span className="text-gray-600 dark:text-gray-400">Avg. Focus</span>
+                  
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <Target className="w-4 h-4 text-success-500" />
+                      <span className="text-gray-600 dark:text-gray-400">Goals Achieved</span>
+                    </div>
+                    <span className="font-semibold text-gray-900 dark:text-white">{summary.goalsAchieved ?? '—'}/{summary.goalsTotal ?? '—'}</span>
                   </div>
-                  <span className="font-semibold text-gray-900 dark:text-white">87%</span>
+                  
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <TrendingUp className="w-4 h-4 text-blue-500" />
+                      <span className="text-gray-600 dark:text-gray-400">Avg. Focus</span>
+                    </div>
+                    <span className="font-semibold text-gray-900 dark:text-white">{summary.avgFocus != null ? `${summary.avgFocus}%` : '—'}</span>
+                  </div>
                 </div>
-              </div>
+              )}
             </motion.div>
 
             {/* Wellness Tips */}
@@ -531,24 +747,31 @@ const Wellness = () => {
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
                 Wellness Tips
               </h3>
-              
-              <div className="space-y-3">
-                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                  <p className="text-blue-800 dark:text-blue-200 text-sm">
-                    💡 Take a 5-minute break every 25 minutes to maintain focus
-                  </p>
+              {tipsLoading ? (
+                <div className="space-y-3">
+                  {[...Array(3)].map((_, i) => (
+                    <div key={i} className="h-16 bg-gray-100 dark:bg-gray-700 rounded-xl animate-pulse" />
+                  ))}
                 </div>
-                <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                  <p className="text-green-800 dark:text-green-200 text-sm">
-                    🌱 Practice deep breathing when stress levels are high
-                  </p>
+              ) : tipsError ? (
+                <div className="p-3 bg-red-50 dark:bg-red-900/20 rounded-lg text-sm text-red-700 dark:text-red-200 border border-red-200 dark:border-red-700">
+                  {tipsError}
                 </div>
-                <div className="p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
-                  <p className="text-purple-800 dark:text-purple-200 text-sm">
-                    ✨ Regular mood check-ins improve self-awareness
-                  </p>
+              ) : (
+                <div className="space-y-3">
+                  {aiTips.length > 0 ? (
+                    aiTips.map(t => (
+                      <div key={t.id} className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                        <p className="text-gray-800 dark:text-gray-200 text-sm">{t.text}</p>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg text-sm text-gray-700 dark:text-gray-300">
+                      No tips available right now. Check back later.
+                    </div>
+                  )}
                 </div>
-              </div>
+              )}
             </motion.div>
           </div>
         </div>

@@ -777,6 +777,61 @@ class AIOrchestrator {
     }
   }
 
+  async orchestrateSocialLearning(params) {
+    try {
+      const {
+        topic,
+        userProfile = {},
+        peers = [],
+        cognitiveState = { attention: 60, engagement: 60, confusion: 30 }
+      } = params || {}
+
+      // Lightweight plan leveraging existing generators (no heavy AI calls unless needed)
+      const studyCircles = (peers || []).slice(0, 5).map((p, idx) => ({
+        id: `circle_${idx + 1}`,
+        members: [userProfile.name || 'You', p.name || `Peer ${idx + 1}`],
+        focus: topic || 'General Review',
+        mode: 'collaborative_practice'
+      }))
+
+      const engagementBoosters = []
+      if ((cognitiveState.attention || 0) < 50) {
+        engagementBoosters.push('pair_programming', 'interactive_quiz_duel')
+      }
+      if ((cognitiveState.confusion || 0) > 50) {
+        engagementBoosters.push('peer_explanations', 'example_walkthroughs')
+      }
+
+      const schedule = {
+        recommendedSessions: 3,
+        durationMinutes: 30,
+        cadence: 'bi-weekly',
+        suggestedTimes: ['18:00', '20:00']
+      }
+
+      return {
+        topic,
+        studyCircles,
+        engagementBoosters,
+        schedule,
+        resources: [
+          'shared_note_templates',
+          'discussion_prompts',
+          'code_review_checklist'
+        ],
+        expectedOutcomes: {
+          engagement: '+15%',
+          comprehension: '+10%',
+          retention: '+12%'
+        },
+        timestamp: new Date().toISOString()
+      }
+    } catch (error) {
+      console.error('Social learning orchestration failed:', error)
+      return { error: error.message }
+    }
+  }
+
   analyzeWellnessImpact(params) {
     const correlations = []
     

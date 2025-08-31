@@ -11,6 +11,18 @@ const EXPRESS_API = env.VITE_API_URL
 const DIRECT_PY = env.VITE_PYTHON_API_URL || env.VITE_PY_BACKEND_URL || 'http://localhost:5000'
 const PY_BACKEND = USE_PROXY && EXPRESS_API ? `${EXPRESS_API}/api/python` : DIRECT_PY
 
+// Build final Python endpoint path correctly for proxied vs direct calls
+function pyEndpoint(path) {
+  // path should start with '/emotion/...' or '/attention/...'
+  const base = PY_BACKEND
+  if (USE_PROXY) {
+    // Express mounts proxy at '/api/python' and expects '/emotion/...'
+    return `${base}${path}`
+  }
+  // Direct FastAPI expects '/api/...' prefix
+  return `${base}/api${path}`
+}
+
 function getAuthHeader() {
   // Prefer sending x-auth-token when using proxy; Authorization otherwise
   try {
@@ -287,6 +299,15 @@ class AdvancedMLService {
     }
   }
 
+  // Safely determine whether a Brain.js network can run
+  isBrainRunnable(net) {
+    try {
+      return !!(net && typeof net.run === 'function')
+    } catch {
+      return false
+    }
+  }
+
   async analyzeEmotionAdvanced(imageData) {
     await this.initialize()
     
@@ -341,7 +362,7 @@ class AdvancedMLService {
 
   async _pyAnalyzeEmotion(imageData) {
     try {
-      const resp = await fetch(`${PY_BACKEND}/api/emotion/analyze`, {
+      const resp = await fetch(pyEndpoint('/emotion/analyze'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
         credentials: USE_PROXY ? 'include' : 'same-origin',
@@ -571,7 +592,7 @@ class AdvancedMLService {
 
   async _pyTrackAttention(imageData) {
     try {
-      const resp = await fetch(`${PY_BACKEND}/api/attention/track`, {
+      const resp = await fetch(pyEndpoint('/attention/track'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
         credentials: USE_PROXY ? 'include' : 'same-origin',

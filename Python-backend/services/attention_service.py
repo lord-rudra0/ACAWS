@@ -22,9 +22,21 @@ class AttentionTrackingService:
         self.mpf = None  # MediaPipe disabled; using OpenCV-only path
         
         # Thresholds
-        self.attention_threshold = 0.7
-        self.blink_rate_threshold = 20  # blinks per minute
-        self.gaze_deviation_threshold = 30  # degrees
+        # Read from environment when available for easy calibration
+        # ATTENTION_SCORE_THRESHOLD expects 0-1 range; others are degrees or counts
+        self.attention_threshold = float(os.getenv('ATTENTION_SCORE_THRESHOLD', '0.7'))
+        self.blink_rate_threshold = int(os.getenv('ATTENTION_BLINK_RATE_THRESHOLD', '20'))  # blinks per minute
+        self.gaze_deviation_threshold = float(os.getenv('ATTENTION_GAZE_DEVIATION_THRESHOLD', '30'))  # degrees
+        self.head_deviation_threshold = float(os.getenv('ATTENTION_HEAD_DEVIATION_THRESHOLD', '20'))  # |yaw|+|pitch|
+
+        # Penalty weights (configurable)
+        self.blink_penalty_weight = float(os.getenv('ATTENTION_PENALTY_BLINK_WEIGHT', '2.0'))
+        self.gaze_penalty_weight = float(os.getenv('ATTENTION_PENALTY_GAZE_WEIGHT', '1.5'))
+        self.head_penalty_weight = float(os.getenv('ATTENTION_PENALTY_HEAD_WEIGHT', '1.2'))
+
+        # Smoothing params (EWMA)
+        self.smoothing_alpha = float(os.getenv('ATTENTION_SMOOTHING_ALPHA', '0.4'))  # 0..1
+        self._smoothed_attention = None
         
         self._load_models()
     
@@ -84,6 +96,13 @@ class AttentionTrackingService:
             
             # Calculate attention score
             attention_score = self._calculate_attention_score(blink_data, gaze_data, head_pose)
+
+            # EWMA smoothing
+            if self._smoothed_attention is None:
+                self._smoothed_attention = attention_score
+            else:
+                a = min(1.0, max(0.0, self.smoothing_alpha))
+                self._smoothed_attention = a * attention_score + (1 - a) * self._smoothed_attention
             
             # Determine focus level
             focus_level = self._determine_focus_level(attention_score, gaze_data, blink_data)
@@ -106,6 +125,7 @@ class AttentionTrackingService:
             
             return {
                 "attention_score": attention_score,
+                "smoothed_attention_score": float(self._smoothed_attention),
                 "gaze_direction": gaze_data["direction"],
                 "blink_rate": blink_data["rate"],
                 "head_pose": head_pose,
@@ -155,17 +175,25 @@ class AttentionTrackingService:
             
             # Penalize for excessive blinking (fatigue indicator)
             if blink_data["rate"] > self.blink_rate_threshold:
-                score -= min(30, (blink_data["rate"] - self.blink_rate_threshold) * 2)
+                blink_over = (blink_data["rate"] - self.blink_rate_threshold)
+                score -= min(30, blink_over * self.blink_penalty_weight)
             
             # Penalize for gaze deviation
             gaze_deviation = abs(gaze_data.get("horizontal_angle", 0))
+            gaze_conf = float(gaze_data.get("confidence", 0.7))
             if gaze_deviation > self.gaze_deviation_threshold:
-                score -= min(40, (gaze_deviation - self.gaze_deviation_threshold) * 1.5)
+                penalty = (gaze_deviation - self.gaze_deviation_threshold) * self.gaze_penalty_weight * max(0.3, min(1.0, gaze_conf))
+                score -= min(40, penalty)
             
             # Penalize for head pose deviation
-            head_deviation = abs(head_pose.get("yaw", 0)) + abs(head_pose.get("pitch", 0))
-            if head_deviation > 20:
-                score -= min(30, (head_deviation - 20) * 1.2)
+            head_yaw = abs(head_pose.get("yaw", 0))
+            head_pitch = abs(head_pose.get("pitch", 0))
+            head_deviation = head_yaw + head_pitch
+            # derive a soft confidence based on deviation (smaller deviation -> higher confidence)
+            head_conf = max(0.3, 1.0 - min(1.0, head_deviation / 60.0))
+            if head_deviation > self.head_deviation_threshold:
+                penalty = (head_deviation - self.head_deviation_threshold) * self.head_penalty_weight * head_conf
+                score -= min(30, penalty)
             
             return max(0, min(100, score))
             

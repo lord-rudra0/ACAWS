@@ -58,6 +58,7 @@ else:
 
 from core.auth import verify_token
 from database.connection import get_db
+from database.logger import log_emotion, log_attention, log_generic
 
 logger = logging.getLogger(__name__)
 security = HTTPBearer()
@@ -109,23 +110,11 @@ async def analyze_emotion(
         # Analyze frame
         result = await emotion_service.analyze_frame(frame_data.frame)
 
-        # Persist to MongoDB
-        db = get_db()
-        if db:
-            try:
-                doc = {
-                    "user_id": user["id"],
-                    "session_id": None,
-                    "primary_emotion": result.get("primary_emotion"),
-                    "emotion_confidence": result.get("emotion_confidence"),
-                    "emotion_probabilities": result.get("emotion_probabilities"),
-                    "face_coordinates": result.get("face_coordinates", {}),
-                    "faces_detected": result.get("faces_detected"),
-                    "timestamp": result.get("timestamp") or datetime.now().isoformat(),
-                }
-                await db["emotion_analyses"].insert_one(doc)
-            except Exception as e:
-                logger.error(f"Emotion result persistence failed: {e}")
+        # Persist full payload to MongoDB
+        try:
+            await log_emotion(user_id=user["id"], payload=result, session_id=None, source="api")
+        except Exception as e:
+            logger.error(f"Emotion result persistence failed: {e}")
         
         return {
             "success": True,
@@ -173,25 +162,11 @@ async def track_attention(
         attention_service = AttentionTrackingService()
         result = await attention_service.track_attention(frame_data.frame)
 
-        # Persist to MongoDB
-        db = get_db()
-        if db:
-            try:
-                doc = {
-                    "user_id": user["id"],
-                    "session_id": None,
-                    "attention_score": result.get("attention_score"),
-                    "focus_level": result.get("focus_level"),
-                    "gaze_direction": result.get("gaze_direction"),
-                    "blink_rate": result.get("blink_rate"),
-                    "head_pose": result.get("head_pose"),
-                    "confidence": result.get("confidence"),
-                    "face_detected": result.get("face_detected", False),
-                    "timestamp": result.get("timestamp") or datetime.now().isoformat(),
-                }
-                await db["attention_tracking"].insert_one(doc)
-            except Exception as e:
-                logger.error(f"Attention result persistence failed: {e}")
+        # Persist full payload to MongoDB
+        try:
+            await log_attention(user_id=user["id"], payload=result, session_id=None, source="api")
+        except Exception as e:
+            logger.error(f"Attention result persistence failed: {e}")
         
         return {
             "success": True,
@@ -246,6 +221,19 @@ async def adapt_content(
             current_content.dict()
         )
         
+        # Persist full payload
+        try:
+            await log_generic("learning_events", user_id=user_id, payload={
+                "event": "adapt_content",
+                "input": {
+                    "cognitive_state": cognitive_state.dict(),
+                    "current_content": current_content.dict()
+                },
+                "result": result
+            })
+        except Exception as e:
+            logger.error(f"Adapt content persistence failed: {e}")
+
         return {
             "success": True,
             "data": result,
@@ -426,6 +414,16 @@ async def get_analytics_dashboard(
             }
         }
         
+        # Persist dashboard generation
+        try:
+            await log_generic("analytics_events", user_id=user_id, payload={
+                "event": "dashboard",
+                "time_range": time_range,
+                "result": dashboard_data
+            })
+        except Exception as e:
+            logger.error(f"Analytics dashboard persistence failed: {e}")
+
         return {
             "success": True,
             "data": dashboard_data,
@@ -465,6 +463,17 @@ async def generate_analytics_report(
             "download_url": f"/api/reports/download/{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{report_type}"
         }
         
+        # Persist report generation
+        try:
+            await log_generic("analytics_events", user_id=user_id, payload={
+                "event": "generate_report",
+                "report_type": report_type,
+                "time_range": time_range,
+                "result": report_data
+            })
+        except Exception as e:
+            logger.error(f"Analytics report persistence failed: {e}")
+
         return {
             "success": True,
             "data": report_data

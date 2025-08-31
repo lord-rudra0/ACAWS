@@ -114,6 +114,23 @@ class EmotionAnalysisService:
             # Convert to grayscale
             gray_face = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
             
+            # Contrast Limited Adaptive Histogram Equalization (CLAHE)
+            try:
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+                gray_face = clahe.apply(gray_face)
+            except Exception:
+                pass
+            
+            # Gamma correction for illumination normalization
+            try:
+                gamma = float(os.getenv('EMOTION_PREPROC_GAMMA', '1.0'))
+                if gamma and abs(gamma - 1.0) > 1e-3:
+                    inv_gamma = 1.0 / max(0.1, gamma)
+                    table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in np.arange(0, 256)]).astype('uint8')
+                    gray_face = cv2.LUT(gray_face, table)
+            except Exception:
+                pass
+            
             # Resize to model input size
             resized_face = cv2.resize(gray_face, (48, 48))
             
@@ -178,16 +195,35 @@ class EmotionAnalysisService:
             # Predict emotion
             emotion_probs = self._predict_emotion(processed_face)
             
-            # Get primary emotion
-            primary_emotion = max(emotion_probs, key=emotion_probs.get)
-            confidence = emotion_probs[primary_emotion]
+            # Temporal smoothing of probabilities (simple moving average over recent frames)
+            try:
+                smoothing_window = int(os.getenv('EMOTION_SMOOTHING_WINDOW', '5'))
+                # Store the raw probs in frame buffer
+                self.frame_buffer.append({
+                    "probs": emotion_probs,
+                    "timestamp": datetime.now()
+                })
+                if len(self.frame_buffer) > max(self.buffer_size, smoothing_window):
+                    self.frame_buffer.pop(0)
+                # Compute smoothed probs over last N entries
+                recent = [f["probs"] for f in self.frame_buffer[-smoothing_window:]] if smoothing_window > 1 else [emotion_probs]
+                smoothed = {k: float(np.mean([r.get(k, 0.0) for r in recent])) for k in self.emotion_labels}
+            except Exception:
+                smoothed = emotion_probs
             
-            # Add to frame buffer for temporal analysis
-            self.frame_buffer.append({
-                "emotion": primary_emotion,
-                "confidence": confidence,
-                "timestamp": datetime.now()
-            })
+            # Get primary emotions
+            primary_emotion = max(emotion_probs, key=emotion_probs.get)
+            confidence = float(emotion_probs[primary_emotion])
+            smoothed_primary = max(smoothed, key=smoothed.get)
+            smoothed_confidence = float(smoothed[smoothed_primary])
+            
+            # Confidence gating (fallback to neutral if below threshold)
+            try:
+                conf_thr = float(os.getenv('MODEL_CONFIDENCE_THRESHOLD', '0.7'))
+            except Exception:
+                conf_thr = 0.7
+            gated_primary = primary_emotion if confidence >= conf_thr else 'neutral'
+            gated_smoothed_primary = smoothed_primary if smoothed_confidence >= conf_thr else 'neutral'
             
             # Keep buffer size limited
             if len(self.frame_buffer) > self.buffer_size:
@@ -195,9 +231,12 @@ class EmotionAnalysisService:
             
             return {
                 "faces_detected": len(faces),
-                "primary_emotion": primary_emotion,
+                "primary_emotion": gated_primary,
                 "emotion_confidence": confidence,
                 "emotion_probabilities": emotion_probs,
+                "smoothed_primary_emotion": gated_smoothed_primary,
+                "smoothed_emotion_confidence": smoothed_confidence,
+                "smoothed_emotion_probabilities": smoothed,
                 "face_coordinates": {"x": int(x), "y": int(y), "width": int(w), "height": int(h)},
                 "timestamp": datetime.now().isoformat()
             }

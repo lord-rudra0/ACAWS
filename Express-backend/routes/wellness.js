@@ -3,6 +3,8 @@ import { body, validationResult } from 'express-validator'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import mongoose from 'mongoose'
 import WellnessEntry from '../models/WellnessEntry.js'
+import DailyWellnessSummary from '../models/DailyWellnessSummary.js'
+import { query } from '../config/database.js'
 
 const router = express.Router()
 
@@ -56,6 +58,47 @@ router.post('/entries', [
   })
 }))
 
+// Upsert daily wellness summary (MongoDB)
+router.post('/daily-summary', [
+  body('date').isString().matches(/^\d{4}-\d{2}-\d{2}$/).withMessage('date must be YYYY-MM-DD'),
+  body('wellness_score').optional().isNumeric(),
+  body('sessions').optional().isInt({ min: 0 }),
+  body('goals').optional().isArray(),
+  body('goals_achieved').optional().isInt({ min: 0 }),
+  body('goals_total').optional().isInt({ min: 0 }),
+  body('avg_focus').optional().isNumeric(),
+  body('tips_sample').optional().isArray()
+], asyncHandler(async (req, res) => {
+  const errors = validationResult(req)
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, message: 'Validation failed', errors: errors.array() })
+  }
+
+  const userId = req.user.id
+  const { date, wellness_score, sessions, goals = [], goals_achieved, goals_total, avg_focus, tips_sample = [], meta } = req.body
+
+  const update = {
+    user_id: new mongoose.Types.ObjectId(userId),
+    date,
+    wellness_score,
+    sessions,
+    goals,
+    goals_achieved,
+    goals_total,
+    avg_focus,
+    tips_sample,
+    meta
+  }
+
+  const doc = await DailyWellnessSummary.findOneAndUpdate(
+    { user_id: new mongoose.Types.ObjectId(userId), date },
+    update,
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  )
+
+  res.status(201).json({ success: true, message: 'Daily summary saved', summary: doc })
+}))
+
 // Get wellness history (MongoDB)
 router.get('/history', asyncHandler(async (req, res) => {
   const userId = req.user.id
@@ -102,36 +145,62 @@ router.get('/history', asyncHandler(async (req, res) => {
 router.get('/insights', asyncHandler(async (req, res) => {
   const userId = req.user.id
 
-  // Get recent wellness data
-  const recentData = await query(
-    `SELECT mood_score, stress_level, energy_level, created_at
-     FROM wellness_entries 
-     WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '7 days'
-     ORDER BY created_at`,
-    [userId]
-  )
+  // Mongo-only insights: last 7 days of wellness entries
+  const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+  const docs = await WellnessEntry.find({
+    user_id: new mongoose.Types.ObjectId(userId),
+    created_at: { $gte: since }
+  }).sort({ created_at: 1 })
 
-  // Get learning session correlation
-  const correlationData = await query(
-    `SELECT 
-       we.mood_score, we.stress_level, we.energy_level,
-       ls.attention_score, ls.completion_percentage
-     FROM wellness_entries we
-     JOIN learning_sessions ls ON DATE(we.created_at) = DATE(ls.started_at)
-     WHERE we.user_id = $1 AND ls.user_id = $1
-     AND we.created_at >= NOW() - INTERVAL '30 days'`,
-    [userId]
-  )
+  const recentRows = docs.map(d => ({
+    mood_score: d.mood_score,
+    stress_level: d.stress_level,
+    energy_level: d.energy_level,
+    created_at: d.created_at
+  }))
+  const correlationRows = [] // No PG correlations in Mongo-only mode
 
   // Generate insights
-  const insights = generateWellnessInsights(recentData.rows, correlationData.rows)
+  const insights = generateWellnessInsights(recentRows, correlationRows)
 
   res.json({
     success: true,
     insights,
-    data_points: recentData.rows.length,
-    correlation_data_points: correlationData.rows.length
+    data_points: recentRows.length,
+    correlation_data_points: correlationRows.length
   })
+}))
+
+// Mood analytics aggregated by day over a time range
+router.get('/mood-analytics', asyncHandler(async (req, res) => {
+  const userId = req.user.id
+  const { time_range = 'week' } = req.query
+
+  const rangeToDays = { week: 7, month: 30, quarter: 90 }
+  const days = rangeToDays[time_range] || 7
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+
+  const data = await WellnessEntry.aggregate([
+    { $match: { user_id: new mongoose.Types.ObjectId(userId), created_at: { $gte: since } } },
+    { $group: {
+        _id: { $dateToString: { format: '%Y-%m-%d', date: '$created_at' } },
+        avg_mood: { $avg: '$mood_score' },
+        avg_stress: { $avg: '$stress_level' },
+        avg_energy: { $avg: '$energy_level' },
+        entries: { $sum: 1 }
+    }},
+    { $sort: { _id: 1 } }
+  ])
+
+  const series = data.map(d => ({
+    date: d._id,
+    mood: Math.round(d.avg_mood * 10) / 10,
+    stress: Math.round(d.avg_stress * 10) / 10,
+    energy: Math.round(d.avg_energy * 10) / 10,
+    entries: d.entries
+  }))
+
+  res.json({ success: true, time_range, data: series })
 }))
 
 // Record break activity
