@@ -1,0 +1,38 @@
+# dependencies
+node_modules/
+
+# production
+dist/
+build/
+
+# misc
+.env
+.env.*
+.DS_Store
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# local env files
+.local
+
+# editor directories and files
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.swp
+*.swo
+
+# coverage
+coverage/
+
+# vite
+.vite/
