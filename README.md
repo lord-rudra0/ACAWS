@@ -4,8 +4,8 @@
 
 1) Clone
 ```bash
-git clone <repo-url>
-cd <repo-folder>
+git clone https://github.com/DevOps-Malayalam/DevByZero-Platform-9-
+cd DevByZero-Platform-9-
 ```
 
 2) Environment files
