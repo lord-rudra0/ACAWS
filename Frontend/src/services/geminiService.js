@@ -17,6 +17,58 @@ class GeminiService {
       this.visionModel = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
     }
     this.conversationHistory = new Map()
+
+    // Client-side rate limiting (token bucket)
+    this.rate = {
+      capacity: Number(import.meta.env.VITE_GEMINI_RATE_CAPACITY) || 5, // max requests per window
+      refillIntervalMs: Number(import.meta.env.VITE_GEMINI_RATE_INTERVAL_MS) || 10000, // window size
+      tokens: Number(import.meta.env.VITE_GEMINI_RATE_CAPACITY) || 5,
+      lastRefill: Date.now()
+    }
+  }
+
+  // Token bucket acquire; waits when empty to spread requests
+  async _acquireToken() {
+    const now = Date.now()
+    const elapsed = now - this.rate.lastRefill
+    if (elapsed >= this.rate.refillIntervalMs) {
+      this.rate.tokens = this.rate.capacity
+      this.rate.lastRefill = now
+    }
+    if (this.rate.tokens > 0) {
+      this.rate.tokens -= 1
+      return
+    }
+    // Wait until next window
+    const waitMs = Math.max(50, this.rate.refillIntervalMs - elapsed)
+    await this._wait(waitMs)
+    return this._acquireToken()
+  }
+
+  _wait(ms) { return new Promise(resolve => setTimeout(resolve, ms)) }
+
+  async _requestWithRetry(fn, { maxRetries = 3, baseDelay = 500 } = {}) {
+    let attempt = 0
+    let lastErr
+    while (attempt <= maxRetries) {
+      try {
+        return await fn()
+      } catch (err) {
+        lastErr = err
+        const status = err?.status || err?.response?.status
+        const isRateLimited = status === 429 || /rate limit/i.test(String(err))
+        const isRetryable = isRateLimited || (status >= 500 && status < 600)
+        if (!isRetryable || attempt === maxRetries) break
+        // Respect Retry-After when available
+        const retryAfter = Number(err?.headers?.get?.('retry-after'))
+        const delay = Number.isFinite(retryAfter)
+          ? retryAfter * 1000
+          : Math.min(8000, baseDelay * Math.pow(2, attempt)) + Math.floor(Math.random() * 200)
+        await this._wait(delay)
+        attempt += 1
+      }
+    }
+    throw lastErr || new Error('Request failed')
   }
 
   getTimeoutMs() {
@@ -26,6 +78,7 @@ class GeminiService {
 
   // Unified text generation path: uses backend proxy when enabled
   async generateText(prompt, { model = 'gemini-1.5-flash', systemInstruction, generationConfig } = {}) {
+    await this._acquireToken()
     if (this.useBackend) {
       if (!this.apiBase) {
         throw new Error('VITE_API_URL not set. Required when VITE_USE_BACKEND_GEMINI=true')
@@ -34,29 +87,42 @@ class GeminiService {
       const headers = { 'Content-Type': 'application/json' }
       if (token) headers['Authorization'] = `Bearer ${token}`
 
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), this.getTimeoutMs())
-      const res = await fetch(`${this.apiBase}/api/ai/gemini`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ prompt, model, generationConfig, systemInstruction }),
-        signal: controller.signal
-      }).finally(() => clearTimeout(timeoutId))
-      if (!res.ok) {
-        const text = await res.text().catch(() => '')
-        throw new Error(`Backend Gemini call failed: ${res.status} ${res.statusText} ${text}`)
+      const doFetch = async () => {
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), this.getTimeoutMs())
+        try {
+          const res = await fetch(`${this.apiBase}/api/ai/gemini`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ prompt, model, generationConfig, systemInstruction }),
+            signal: controller.signal
+          })
+          if (!res.ok) {
+            const text = await res.text().catch(() => '')
+            const error = new Error(`Backend Gemini call failed: ${res.status} ${res.statusText} ${text}`)
+            error.status = res.status
+            error.headers = res.headers
+            throw error
+          }
+          const data = await res.json()
+          return data?.output || ''
+        } finally {
+          clearTimeout(timeoutId)
+        }
       }
-      const data = await res.json()
-      return data?.output || ''
+      return this._requestWithRetry(doFetch)
     }
 
     // Fallback to direct SDK usage when not proxying
-    const result = await Promise.race([
-      this.model.generateContent(prompt),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Gemini request timed out')), this.getTimeoutMs()))
-    ])
-    const response = await result.response
-    return response.text()
+    const callSDK = async () => {
+      const result = await Promise.race([
+        this.model.generateContent(prompt),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Gemini request timed out')), this.getTimeoutMs()))
+      ])
+      const response = await result.response
+      return response.text()
+    }
+    return this._requestWithRetry(callSDK)
   }
 
   async generatePersonalizedExplanation(topic, userProfile, cognitiveState) {
@@ -201,6 +267,7 @@ class GeminiService {
 
   async analyzeImageContent(imageData, context) {
     try {
+      await this._acquireToken()
       if (this.useBackend) {
         if (!this.apiBase) {
           throw new Error('VITE_API_URL not set. Required when VITE_USE_BACKEND_GEMINI=true')
@@ -209,20 +276,30 @@ class GeminiService {
         const headers = { 'Content-Type': 'application/json' }
         if (token) headers['Authorization'] = `Bearer ${token}`
 
-        const controller = new AbortController()
-        const timeoutId = setTimeout(() => controller.abort(), this.getTimeoutMs())
-        const res = await fetch(`${this.apiBase}/api/ai/gemini-vision`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ imageData, context, model: 'gemini-1.5-flash' }),
-          signal: controller.signal
-        }).finally(() => clearTimeout(timeoutId))
-        if (!res.ok) {
-          const text = await res.text().catch(() => '')
-          throw new Error(`Backend Gemini vision call failed: ${res.status} ${res.statusText} ${text}`)
+        const doFetch = async () => {
+          const controller = new AbortController()
+          const timeoutId = setTimeout(() => controller.abort(), this.getTimeoutMs())
+          try {
+            const res = await fetch(`${this.apiBase}/api/ai/gemini-vision`, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({ imageData, context, model: 'gemini-1.5-flash' }),
+              signal: controller.signal
+            })
+            if (!res.ok) {
+              const text = await res.text().catch(() => '')
+              const error = new Error(`Backend Gemini vision call failed: ${res.status} ${res.statusText} ${text}`)
+              error.status = res.status
+              error.headers = res.headers
+              throw error
+            }
+            const data = await res.json()
+            return data?.output || ''
+          } finally {
+            clearTimeout(timeoutId)
+          }
         }
-        const data = await res.json()
-        const analysisText = data?.output || ''
+        const analysisText = await this._requestWithRetry(doFetch)
         return {
           analysis: analysisText,
           concepts: this.extractConcepts(analysisText),
@@ -251,17 +328,20 @@ class GeminiService {
         }
       }
       
-      const result = await Promise.race([
-        this.visionModel.generateContent([prompt, imagePart]),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Gemini vision request timed out')), this.getTimeoutMs()))
-      ])
-      const response = await result.response
-      
+      const callSDK = async () => {
+        const result = await Promise.race([
+          this.visionModel.generateContent([prompt, imagePart]),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Gemini vision request timed out')), this.getTimeoutMs()))
+        ])
+        const response = await result.response
+        return response.text()
+      }
+      const analysisText = await this._requestWithRetry(callSDK)
       return {
-        analysis: response.text(),
-        concepts: this.extractConcepts(response.text()),
-        discussionPoints: this.extractDiscussionPoints(response.text()),
-        relatedTopics: this.extractRelatedTopics(response.text()),
+        analysis: analysisText,
+        concepts: this.extractConcepts(analysisText),
+        discussionPoints: this.extractDiscussionPoints(analysisText),
+        relatedTopics: this.extractRelatedTopics(analysisText),
         timestamp: new Date().toISOString()
       }
     } catch (error) {

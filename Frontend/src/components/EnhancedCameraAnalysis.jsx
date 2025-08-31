@@ -87,6 +87,12 @@ const EnhancedCameraAnalysis = ({
       const attention = attentionResult.status === 'fulfilled' ? attentionResult.value : null
       const fatigue = fatigueResult.status === 'fulfilled' ? fatigueResult.value : null
 
+      // Debug logs to verify backend attention flow
+      try {
+        console.debug('[Enhanced] attention result:', attention)
+        console.debug('[Enhanced] py attention score/conf:', attention?.attentionScore, attention?.gazeAnalysis?.confidence)
+      } catch {}
+
       // Advanced cognitive state calculation
       const advancedCognitiveState = calculateAdvancedCognitiveState(emotion, attention, fatigue)
 
@@ -148,10 +154,10 @@ const EnhancedCameraAnalysis = ({
 
   const calculateAdvancedCognitiveState = (emotion, attention, fatigue) => {
     const state = {
-      attention: attention?.attentionScore || 0,
-      engagement: attention?.engagementLevel * 100 || 0,
-      confusion: emotion?.emotions?.confused * 100 || 0,
-      fatigue: fatigue?.fatigueScore || 0,
+      attention: attention?.attentionScore ?? null,
+      engagement: attention?.engagementLevel != null ? attention.engagementLevel * 100 : null,
+      confusion: emotion?.emotions?.confused != null ? emotion.emotions.confused * 100 : 0,
+      fatigue: fatigue?.fatigueScore ?? 0,
       mood: emotion?.emotions ? Object.keys(emotion.emotions).reduce((a, b) => 
         emotion.emotions[a] > emotion.emotions[b] ? a : b
       ) : 'neutral',
@@ -163,8 +169,8 @@ const EnhancedCameraAnalysis = ({
     }
 
     // Advanced calculations
-    state.cognitiveLoad = attention?.cognitiveLoad?.level * 100 || 0
-    state.emotionalStability = emotion?.advancedMetrics?.emotionalStability * 100 || 0
+    state.cognitiveLoad = attention?.cognitiveLoad?.level != null ? attention.cognitiveLoad.level * 100 : null
+    state.emotionalStability = emotion?.advancedMetrics?.emotionalStability != null ? emotion.advancedMetrics.emotionalStability * 100 : 0
     state.focusQuality = calculateFocusQuality(attention)
     state.learningReadiness = calculateLearningReadiness(state)
     
@@ -485,23 +491,23 @@ const EnhancedCameraAnalysis = ({
           {[
             {
               label: 'Attention',
-              value: analysisData.attention?.attentionScore || 0,
+              value: analysisData.attention?.attentionScore ?? null,
               icon: Eye,
               color: 'blue',
-              advanced: analysisData.attention?.focusMap?.focusStability || 0,
+              advanced: analysisData.attention?.focusMap?.focusStability ?? null,
               unit: '%'
             },
             {
               label: 'Cognitive Load',
-              value: advancedMetrics.cognitiveLoad || 0,
+              value: advancedMetrics.cognitiveLoad ?? null,
               icon: Brain,
               color: 'purple',
-              advanced: analysisData.attention?.cognitiveLoad?.level * 100 || 0,
+              advanced: analysisData.attention?.cognitiveLoad?.level != null ? analysisData.attention.cognitiveLoad.level * 100 : null,
               unit: '%'
             },
             {
               label: 'Engagement',
-              value: analysisData.attention?.engagementLevel * 100 || 0,
+              value: analysisData.attention?.engagementLevel != null ? analysisData.attention.engagementLevel * 100 : null,
               icon: Zap,
               color: 'green',
               advanced: calculateEngagementQuality(),
@@ -509,10 +515,10 @@ const EnhancedCameraAnalysis = ({
             },
             {
               label: 'Emotional State',
-              value: advancedMetrics.emotionalStability || 0,
+              value: advancedMetrics.emotionalStability ?? null,
               icon: Heart,
               color: 'red',
-              advanced: analysisData.emotion?.emotionIntensity?.overall * 100 || 0,
+              advanced: analysisData.emotion?.emotionIntensity?.overall != null ? analysisData.emotion.emotionIntensity.overall * 100 : null,
               unit: '%'
             }
           ].map((metric) => {
@@ -523,19 +529,19 @@ const EnhancedCameraAnalysis = ({
                   <Icon className={`w-6 h-6 text-${metric.color}-500`} />
                 </div>
                 <div className={`text-xl font-bold text-${metric.color}-500 mb-1`}>
-                  {Math.round(metric.value)}{metric.unit}
+                  {fmt(metric.value, metric.unit)}
                 </div>
                 <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">
                   {metric.label}
                 </div>
                 <div className="text-xs text-gray-500 dark:text-gray-400">
-                  Quality: {Math.round(metric.advanced)}{metric.unit}
+                  Quality: {fmt(metric.advanced, metric.unit)}
                 </div>
                 
                 {/* Advanced Tooltip */}
                 <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-900 text-white text-xs rounded-lg p-2 whitespace-nowrap z-10">
-                  <div>Current: {Math.round(metric.value)}{metric.unit}</div>
-                  <div>Quality: {Math.round(metric.advanced)}{metric.unit}</div>
+                  <div>Current: {fmt(metric.value, metric.unit)}</div>
+                  <div>Quality: {fmt(metric.advanced, metric.unit)}</div>
                   <div>Trend: {getTrendDirection(metric.label)}</div>
                 </div>
               </div>
@@ -679,6 +685,12 @@ const calculateEngagementQuality = () => {
 const getTrendDirection = (metric) => {
   const trends = ['↗️ Rising', '↘️ Falling', '→ Stable']
   return trends[Math.floor(Math.random() * trends.length)]
+}
+
+// Display formatter: show '—' when null/undefined, else rounded with unit
+const fmt = (value, unit = '') => {
+  const isNil = value === null || value === undefined || Number.isNaN(value)
+  return isNil ? '—' : `${Math.round(value)}${unit}`
 }
 
 export default EnhancedCameraAnalysis

@@ -5,8 +5,13 @@ const PY_API_BASE = process.env.PYTHON_API_URL || 'http://localhost:5000'
 
 const router = express.Router()
 
-// Helper: extract token from Authorization header or cookie
+// Helper: extract token from x-auth-token, Authorization header, or cookie
 function extractToken(req) {
+  // Highest priority: custom header from frontend when proxying
+  const xToken = req.headers['x-auth-token']
+  if (xToken && typeof xToken === 'string' && xToken.trim().length > 0) {
+    return xToken.trim()
+  }
   // Prefer Authorization header if present
   const authHeader = req.headers['authorization']
   if (authHeader && authHeader.startsWith('Bearer ')) {

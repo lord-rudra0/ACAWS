@@ -12,11 +12,12 @@ const DIRECT_PY = env.VITE_PYTHON_API_URL || env.VITE_PY_BACKEND_URL || 'http://
 const PY_BACKEND = USE_PROXY && EXPRESS_API ? `${EXPRESS_API}/api/python` : DIRECT_PY
 
 function getAuthHeader() {
-  // When using proxy, skip adding Authorization from browser; Express will inject from cookie/header
-  if (USE_PROXY) return {}
+  // Prefer sending x-auth-token when using proxy; Authorization otherwise
   try {
     const token = localStorage.getItem('token') || localStorage.getItem('auth_token')
-    return token ? { Authorization: `Bearer ${token}` } : {}
+    if (!token) return {}
+    if (USE_PROXY) return { 'x-auth-token': token }
+    return { Authorization: `Bearer ${token}` }
   } catch {
     return {}
   }
