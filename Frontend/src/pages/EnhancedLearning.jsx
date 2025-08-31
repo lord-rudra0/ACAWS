@@ -28,6 +28,7 @@ import IntelligentContentAdaptation from '../components/IntelligentContentAdapta
 import PredictiveAnalytics from '../components/PredictiveAnalytics'
 import useAIFeatures from '../hooks/useAIFeatures'
 import { useAuth } from '../contexts/AuthContext'
+import geminiService from '../services/geminiService'
 
 const EnhancedLearning = () => {
   const { user } = useAuth()
@@ -36,13 +37,13 @@ const EnhancedLearning = () => {
   const [isSessionActive, setIsSessionActive] = useState(false)
   const [currentModule, setCurrentModule] = useState(null)
   const [cognitiveState, setCognitiveState] = useState({
-    attention: 85,
-    confusion: 15,
-    engagement: 92,
-    fatigue: 20,
-    learningReadiness: 88,
-    cognitiveLoad: 45,
-    emotionalStability: 78
+    attention: 0,
+    confusion: 0,
+    engagement: 0,
+    fatigue: 0,
+    learningReadiness: 0,
+    cognitiveLoad: 0,
+    emotionalStability: 0
   })
   const [sessionTime, setSessionTime] = useState(0)
   const [showAITutor, setShowAITutor] = useState(false)
@@ -80,47 +81,10 @@ const EnhancedLearning = () => {
     userProfile: user
   })
 
-  const enhancedLearningModules = [
-    {
-      id: 1,
-      title: 'AI-Enhanced Machine Learning Fundamentals',
-      description: 'Comprehensive ML course with AI tutoring and adaptive content',
-      difficulty: 'beginner',
-      duration: '60 min',
-      progress: 75,
-      topics: ['Supervised Learning', 'Unsupervised Learning', 'Neural Networks', 'Model Evaluation'],
-      aiFeatures: ['Personalized explanations', 'Adaptive quizzes', 'Real-time feedback'],
-      hasAITutor: true,
-      hasAdaptiveContent: true,
-      estimatedScore: 85
-    },
-    {
-      id: 2,
-      title: 'Advanced Deep Learning with AI Assistance',
-      description: 'Deep learning concepts with intelligent content adaptation',
-      difficulty: 'intermediate',
-      duration: '90 min',
-      progress: 30,
-      topics: ['CNNs', 'RNNs', 'Transformers', 'GANs', 'Transfer Learning'],
-      aiFeatures: ['Visual concept mapping', 'Code generation', 'Project guidance'],
-      hasAITutor: true,
-      hasAdaptiveContent: true,
-      estimatedScore: 78
-    },
-    {
-      id: 3,
-      title: 'Computer Vision with Intelligent Tutoring',
-      description: 'CV applications with AI-powered learning assistance',
-      difficulty: 'advanced',
-      duration: '120 min',
-      progress: 0,
-      topics: ['Image Processing', 'Object Detection', 'Face Recognition', 'Medical Imaging'],
-      aiFeatures: ['Interactive simulations', 'Real-world projects', 'Industry insights'],
-      hasAITutor: true,
-      hasAdaptiveContent: true,
-      estimatedScore: 72
-    }
-  ]
+  const [modules, setModules] = useState([])
+  const [newModuleTitle, setNewModuleTitle] = useState('')
+  const [newModuleDifficulty, setNewModuleDifficulty] = useState('beginner')
+  const [newModuleDuration, setNewModuleDuration] = useState('60 min')
 
   useEffect(() => {
     if (isSessionActive) {
@@ -173,6 +137,26 @@ const EnhancedLearning = () => {
       )
       
       setLearningPaths(prev => [...prev, intelligentContent])
+      
+      // Track module locally if not already present
+      setModules(prev => {
+        const exists = prev.some(m => m.id === module.id || m.title === module.title)
+        if (exists) return prev
+        const newMod = {
+          id: module.id || Date.now(),
+          title: module.title,
+          description: module.description || 'User added module',
+          difficulty: module.difficulty || 'beginner',
+          duration: module.duration || '60 min',
+          progress: module.progress || 0,
+          topics: module.topics || [],
+          aiFeatures: module.aiFeatures || [],
+          hasAITutor: true,
+          hasAdaptiveContent: true,
+          estimatedScore: module.estimatedScore || Math.round(learningMetrics.averageScore)
+        }
+        return [...prev, newMod]
+      })
       
       // Predict learning outcome for this module
       const prediction = await predictLearningOutcome(module)
@@ -325,6 +309,22 @@ const EnhancedLearning = () => {
     return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
+  const generateTopicExplanation = async (topic) => {
+    try {
+      const result = await geminiService.generatePersonalizedExplanation(
+        topic,
+        user || {},
+        cognitiveState
+      )
+      const message = result?.explanation || 'Explanation generated.'
+      setAiInsights(prev => [...prev.slice(-9), { message, source: 'gemini', topic, timestamp: new Date() }])
+      if (window.toast) window.toast.success('AI explanation generated')
+    } catch (error) {
+      console.error('Topic explanation failed:', error)
+      if (window.toast) window.toast.warning('Could not generate explanation right now')
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-6">
       <div className="max-w-7xl mx-auto">
@@ -446,9 +446,63 @@ const EnhancedLearning = () => {
                   </div>
                 </div>
               </div>
-              
+
+              {/* Add Module (recorded locally) */}
+              <div className="mb-4 grid grid-cols-1 md:grid-cols-4 gap-2">
+                <input
+                  type="text"
+                  placeholder="Module title"
+                  value={newModuleTitle}
+                  onChange={e => setNewModuleTitle(e.target.value)}
+                  className="col-span-2 px-3 py-2 rounded-lg border dark:bg-gray-900 dark:border-gray-700"
+                />
+                <select
+                  value={newModuleDifficulty}
+                  onChange={e => setNewModuleDifficulty(e.target.value)}
+                  className="px-3 py-2 rounded-lg border dark:bg-gray-900 dark:border-gray-700"
+                >
+                  <option value="beginner">beginner</option>
+                  <option value="intermediate">intermediate</option>
+                  <option value="advanced">advanced</option>
+                </select>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newModuleDuration}
+                    onChange={e => setNewModuleDuration(e.target.value)}
+                    className="flex-1 px-3 py-2 rounded-lg border dark:bg-gray-900 dark:border-gray-700"
+                  />
+                  <button
+                    className="btn-primary"
+                    onClick={() => {
+                      if (!newModuleTitle.trim()) return
+                      const mod = {
+                        id: Date.now(),
+                        title: newModuleTitle.trim(),
+                        description: 'User added module',
+                        difficulty: newModuleDifficulty,
+                        duration: newModuleDuration,
+                        progress: 0,
+                        topics: [],
+                        aiFeatures: [],
+                        hasAITutor: true,
+                        hasAdaptiveContent: true,
+                        estimatedScore: Math.round(learningMetrics.averageScore)
+                      }
+                      setModules(prev => [...prev, mod])
+                      setNewModuleTitle('')
+                    }}
+                  >Add</button>
+                </div>
+              </div>
+
               <div className="space-y-4">
-                {enhancedLearningModules.map((module) => (
+                {modules.length === 0 && (
+                  <div className="p-4 rounded-lg bg-gray-50 dark:bg-gray-900 text-sm text-gray-600 dark:text-gray-400">
+                    No modules yet. Add a module to start a recorded session.
+                  </div>
+                )}
+                {modules.map((module) => (
                   <div
                     key={module.id}
                     className={`p-6 rounded-xl border-2 transition-all duration-300 ${
@@ -486,10 +540,13 @@ const EnhancedLearning = () => {
                             {module.difficulty}
                           </span>
                           <span>{module.duration}</span>
-                          <span>Est. Score: {module.estimatedScore}%</span>
+                          {typeof module.estimatedScore === 'number' && (
+                            <span>Est. Score: {module.estimatedScore}%</span>
+                          )}
                         </div>
                         
                         {/* AI Features */}
+                        {Array.isArray(module.aiFeatures) && module.aiFeatures.length > 0 && (
                         <div className="mb-4">
                           <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">AI Features:</p>
                           <div className="flex flex-wrap gap-2">
@@ -500,6 +557,7 @@ const EnhancedLearning = () => {
                             ))}
                           </div>
                         </div>
+                        )}
                       </div>
                       
                       <button
@@ -512,6 +570,7 @@ const EnhancedLearning = () => {
                     </div>
 
                     {/* Enhanced Progress Bar */}
+                    {Array.isArray(module.topics) && module.topics.length > 0 && (
                     <div className="mb-4">
                       <div className="flex justify-between text-sm text-gray-600 dark:text-gray-400 mb-1">
                         <span>Progress</span>
@@ -532,6 +591,7 @@ const EnhancedLearning = () => {
                         </div>
                       </div>
                     </div>
+                    )}
 
                     {/* Topics with AI Enhancement Indicators */}
                     <div className="flex flex-wrap gap-2">
@@ -635,7 +695,10 @@ const EnhancedLearning = () => {
                   userProfile={user}
                   learningHistory={sessionAnalytics}
                   cognitiveState={cognitiveState}
-                  wellnessData={{ averageStress: 4, averageMood: 7 }}
+                  wellnessData={{
+                    averageStress: Math.round((cognitiveState.fatigue + cognitiveState.cognitiveLoad) / 2 / 10) || 0,
+                    averageMood: Math.round((cognitiveState.emotionalStability + cognitiveState.engagement) / 2 / 10) || 0
+                  }}
                   onPredictionUpdate={(predictions) => console.log('Predictions updated:', predictions)}
                   onRiskAlert={(risks) => {
                     if (window.toast) {
@@ -660,7 +723,10 @@ const EnhancedLearning = () => {
                   totalTime: learningMetrics.totalStudyTime,
                   studyStreak: learningMetrics.streakDays
                 }}
-                wellnessData={{ averageStress: 4, averageMood: 7 }}
+                wellnessData={{
+                  averageStress: Math.round((cognitiveState.fatigue + cognitiveState.cognitiveLoad) / 2 / 10) || 0,
+                  averageMood: Math.round((cognitiveState.emotionalStability + cognitiveState.engagement) / 2 / 10) || 0
+                }}
                 onInsightAction={(insight, action) => {
                   console.log('Insight action:', insight, action)
                   if (window.toast) {
@@ -680,7 +746,10 @@ const EnhancedLearning = () => {
             userProfile={user}
             cognitiveState={cognitiveState}
             learningHistory={sessionAnalytics}
-            wellnessData={{ averageStress: 4, averageMood: 7 }}
+            wellnessData={{
+              averageStress: Math.round((cognitiveState.fatigue + cognitiveState.cognitiveLoad) / 2 / 10) || 0,
+              averageMood: Math.round((cognitiveState.emotionalStability + cognitiveState.engagement) / 2 / 10) || 0
+            }}
             onRecommendationSelected={handleRecommendationSelected}
           />
 

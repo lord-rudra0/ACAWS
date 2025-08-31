@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { wellnessAPI } from '../services/api'
-import enhancedAnalyticsService from '../services/enhancedAnalytics'
+ 
 
 const Wellness = () => {
   const [currentMood, setCurrentMood] = useState(null)
@@ -47,6 +47,12 @@ const Wellness = () => {
   const [goalsLoading, setGoalsLoading] = useState(false)
   const [summary, setSummary] = useState({ sessions: null, goalsAchieved: null, goalsTotal: null, avgFocus: null })
   const [dailySaved, setDailySaved] = useState(false)
+
+  // Local records tracked only from this page interactions
+  const [entriesToday, setEntriesToday] = useState([]) // {mood, stress, energy, timestamp}
+  const [breaksToday, setBreaksToday] = useState([]) // {duration_seconds, started_at, ended_at, type}
+  const [breathingCount, setBreathingCount] = useState(0)
+  const [hydrationCount, setHydrationCount] = useState(0)
 
   const moods = [
     { icon: Smile, label: 'Great', value: 5, color: 'text-green-500' },
@@ -151,82 +157,82 @@ const Wellness = () => {
     fetchWellness()
   }, [])
 
-  // Fetch AI tips/recommendations and daily goals/summary
+  // Derive tips, goals, and summary purely from local recorded interactions on this page
   useEffect(() => {
-    const fetchAIAndGoals = async () => {
-      setTipsLoading(true)
-      setGoalsLoading(true)
-      setTipsError(null)
-      try {
-        const report = await enhancedAnalyticsService.generateComprehensiveReport('me', 'today', true)
+    setTipsLoading(true)
+    setGoalsLoading(true)
+    setTipsError(null)
 
-        // Tips from AI insights and recommendations
-        const recs = Array.isArray(report?.recommendations) ? report.recommendations : []
-        const aiAdvice = Array.isArray(report?.aiInsights?.personalizedAdvice) ? report.aiInsights.personalizedAdvice : []
-        const merged = [...recs, ...aiAdvice]
-          .map((r, idx) => (typeof r === 'string' ? { id: `tip-${idx}`, text: r } : { id: r.id || `tip-${idx}`, text: r.text || r.recommendation || r.title || '' }))
-          .filter(t => t.text)
-          .slice(0, 6)
-        setAiTips(merged)
+    try {
+      // Compute goals from local counters
+      const goalsRaw = [
+        { label: 'Mood Check-ins', current: entriesToday.length, target: 3 },
+        { label: 'Break Sessions', current: breaksToday.length, target: 2 },
+        { label: 'Breathing Exercises', current: breathingCount, target: 2 },
+        { label: 'Hydration Reminders', current: hydrationCount, target: 8 }
+      ]
+      const goals = goalsRaw.map(g => ({ ...g, completed: g.current >= g.target }))
+      setDailyGoals(goals)
 
-        // Daily goals (mocked from analytics but shaped as goals)
-        const wellness = report?.wellnessAnalytics || {}
-        const learning = report?.learningAnalytics || {}
+      // Summary from local data
+      const avgEnergy = entriesToday.length
+        ? Math.round(entriesToday.reduce((sum, e) => sum + (Number(e.energy) || 0), 0) / entriesToday.length)
+        : null
+      const sessions = entriesToday.length
+      const goalsAchieved = goals.filter(g => g.completed).length
+      const goalsTotal = goals.length
+      const avgFocus = avgEnergy != null ? Math.min(100, Math.max(0, avgEnergy * 10)) : null
+      const computedSummary = { sessions, goalsAchieved, goalsTotal, avgFocus }
+      setSummary(computedSummary)
 
-        const goals = [
-          { label: 'Mood Check-ins', current: Math.min(3, Math.round((wellness.moodVariability || 1))), target: 3 },
-          { label: 'Break Sessions', current: Math.min(4, Math.round((wellness.stressSpikes || 0) + 1)), target: 4 },
-          { label: 'Breathing Exercises', current: Math.min(2, Math.round(((10 - (wellness.averageStressLevel || 5)) / 5))), target: 2 },
-          { label: 'Hydration Reminders', current: Math.min(8, 4 + Math.round((wellness.averageEnergyLevel || 6) / 2)), target: 8 }
-        ].map(g => ({ ...g, completed: g.current >= g.target }))
-        setDailyGoals(goals)
+      // Generate simple rule-based tips from latest recorded values
+      const last = entriesToday[0] || null
+      const tips = []
+      if (last) {
+        if (Number(last.stress) >= 7) tips.push('High stress detected in last check-in. Consider a short breathing exercise or a mindful break.')
+        if (Number(last.energy) <= 3) tips.push('Low energy noted. Try a quick walk or hydration to boost alertness.')
+        if (Number(last.mood?.value || last.mood) <= 2) tips.push('Mood is low. Reflect for a minute and write a note about what might help.')
+      } else {
+        tips.push('Record your first mood to start tracking your wellness today.')
+      }
+      if (breaksToday.length === 0) tips.push('No breaks recorded yet. Schedule at least one mindful break.')
+      if (breathingCount === 0) tips.push('Try the 4-7-8 breathing exercise to reduce stress.')
+      if (hydrationCount < 4) tips.push('Aim for at least 4 hydration reminders today.')
+      const tipObjs = tips.slice(0, 6).map((t, i) => ({ id: `tip-${i}`, text: t }))
+      setAiTips(tipObjs)
 
-        // Today's summary
-        const sessions = Math.max(1, Math.round((learning.consistencyScore || 60) / 20))
-        const goalsAchieved = goals.filter(g => g.completed).length
-        const goalsTotal = goals.length
-        const avgFocus = Math.round((report?.cognitiveAnalytics?.averageAttention || 75))
-        const computedSummary = { sessions, goalsAchieved, goalsTotal, avgFocus }
-        setSummary(computedSummary)
-
-        // Persist daily wellness summary once per load
-        if (!dailySaved) {
-          try {
-            // Build payload and only include numeric fields when valid
-            const payload = {
-              date: new Date().toISOString().slice(0, 10),
-              sessions: computedSummary.sessions,
-              goals: goals.map(g => ({ label: g.label, current: g.current, target: g.target, completed: g.completed })),
-              goals_achieved: computedSummary.goalsAchieved,
-              goals_total: computedSummary.goalsTotal,
-              avg_focus: computedSummary.avgFocus,
-              tips_sample: merged.slice(0, 3).map(t => t.text),
-              meta: {
-                source: 'frontend_enhanced_analytics',
-                generated_at: new Date().toISOString()
-              }
-            }
-
-            if (typeof wellnessScore === 'number' && Number.isFinite(wellnessScore)) {
-              payload.wellness_score = wellnessScore
-            }
-
-            await wellnessAPI.saveDailySummary(payload)
-            setDailySaved(true)
-          } catch (persistErr) {
-            console.warn('Failed to persist daily summary:', persistErr)
+      // Persist daily summary (built only from local records) once per day/session
+      if (!dailySaved) {
+        const today = new Date().toISOString().slice(0, 10)
+        const payload = {
+          date: today,
+          sessions: computedSummary.sessions,
+          goals: goals.map(g => ({ label: g.label, current: g.current, target: g.target, completed: g.completed })),
+          goals_achieved: computedSummary.goalsAchieved,
+          goals_total: computedSummary.goalsTotal,
+          avg_focus: computedSummary.avgFocus,
+          tips_sample: tipObjs.slice(0, 3).map(t => t.text),
+          meta: {
+            source: 'frontend_local_only',
+            generated_at: new Date().toISOString()
           }
         }
-      } catch (e) {
-        setTipsError(e?.message || 'Failed to load AI tips and goals')
-      } finally {
-        setTipsLoading(false)
-        setGoalsLoading(false)
+        if (typeof wellnessScore === 'number' && Number.isFinite(wellnessScore)) {
+          payload.wellness_score = wellnessScore
+        }
+        // Omit any fields that are null/undefined to satisfy backend validators
+        Object.keys(payload).forEach((k) => {
+          if (payload[k] == null) delete payload[k]
+        })
+        wellnessAPI.saveDailySummary(payload).then(() => setDailySaved(true)).catch(() => {})
       }
+    } catch (e) {
+      setTipsError(e?.message || 'Failed to compute tips and goals')
+    } finally {
+      setTipsLoading(false)
+      setGoalsLoading(false)
     }
-
-    fetchAIAndGoals()
-  }, [])
+  }, [entriesToday, breaksToday, breathingCount, hydrationCount, wellnessScore, dailySaved])
 
   useEffect(() => {
     let interval
@@ -285,6 +291,14 @@ const Wellness = () => {
       if (recordRes?.entry?.wellness_score != null) {
         setWellnessScore(Math.round(recordRes.entry.wellness_score))
       }
+      // Track locally
+      setEntriesToday(prev => [{
+        mood,
+        stress: Math.min(10, Math.max(1, parseInt(stressLevel))),
+        energy: Math.min(10, Math.max(1, parseInt(energyLevel))),
+        timestamp: new Date().toISOString()
+      }, ...prev])
+      setDailySaved(false)
       // Refresh insights/score after recording (secondary)
       const insights = await wellnessAPI.getInsights().catch(() => null)
       const score = insights?.wellnessScore ?? insights?.score ?? insights?.overallScore ?? null
@@ -300,6 +314,8 @@ const Wellness = () => {
       phase: 'inhale',
       count: 4
     })
+    setBreathingCount(c => c + 1)
+    setDailySaved(false)
   }
 
   const stopBreathingExercise = () => {
@@ -322,6 +338,8 @@ const Wellness = () => {
 
   const showHydrationReminder = () => {
     alert('💧 Time to hydrate! Drink a glass of water.')
+    setHydrationCount(c => c + 1)
+    setDailySaved(false)
   }
 
   const handleToggleBreak = async () => {
@@ -330,11 +348,17 @@ const Wellness = () => {
       try {
         if (breakTimer > 0) {
           await wellnessAPI.recordBreak({
+            activity_type: 'mindful_break',
+            duration: parseInt(breakTimer, 10)
+          })
+          // Track locally
+          setBreaksToday(prev => [{
             duration_seconds: breakTimer,
             started_at: breakStartTime,
             ended_at: new Date().toISOString(),
             type: 'mindful_break'
-          })
+          }, ...prev])
+          setDailySaved(false)
         }
       } catch (err) {
         setError(err?.message || 'Failed to record break')
