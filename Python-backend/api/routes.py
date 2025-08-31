@@ -57,6 +57,7 @@ else:
             return {"summary": {"mood": 7.0, "stress": 3.5, "energy": 7.5}}
 
 from core.auth import verify_token
+from database.connection import get_db
 
 logger = logging.getLogger(__name__)
 security = HTTPBearer()
@@ -107,6 +108,24 @@ async def analyze_emotion(
         
         # Analyze frame
         result = await emotion_service.analyze_frame(frame_data.frame)
+
+        # Persist to MongoDB
+        db = get_db()
+        if db:
+            try:
+                doc = {
+                    "user_id": user["id"],
+                    "session_id": None,
+                    "primary_emotion": result.get("primary_emotion"),
+                    "emotion_confidence": result.get("emotion_confidence"),
+                    "emotion_probabilities": result.get("emotion_probabilities"),
+                    "face_coordinates": result.get("face_coordinates", {}),
+                    "faces_detected": result.get("faces_detected"),
+                    "timestamp": result.get("timestamp") or datetime.now().isoformat(),
+                }
+                await db["emotion_analyses"].insert_one(doc)
+            except Exception as e:
+                logger.error(f"Emotion result persistence failed: {e}")
         
         return {
             "success": True,
@@ -153,6 +172,26 @@ async def track_attention(
         
         attention_service = AttentionTrackingService()
         result = await attention_service.track_attention(frame_data.frame)
+
+        # Persist to MongoDB
+        db = get_db()
+        if db:
+            try:
+                doc = {
+                    "user_id": user["id"],
+                    "session_id": None,
+                    "attention_score": result.get("attention_score"),
+                    "focus_level": result.get("focus_level"),
+                    "gaze_direction": result.get("gaze_direction"),
+                    "blink_rate": result.get("blink_rate"),
+                    "head_pose": result.get("head_pose"),
+                    "confidence": result.get("confidence"),
+                    "face_detected": result.get("face_detected", False),
+                    "timestamp": result.get("timestamp") or datetime.now().isoformat(),
+                }
+                await db["attention_tracking"].insert_one(doc)
+            except Exception as e:
+                logger.error(f"Attention result persistence failed: {e}")
         
         return {
             "success": True,

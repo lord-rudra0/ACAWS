@@ -1,10 +1,11 @@
 import cv2
 import numpy as np
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import asyncio
 from datetime import datetime, timedelta
 import os
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ class AttentionTrackingService:
         self.blink_detector = BlinkDetector()
         self.gaze_tracker = GazeTracker()
         self.head_pose_estimator = HeadPoseEstimator()
+        self.mpf = None  # MediaPipe disabled; using OpenCV-only path
         
         # Thresholds
         self.attention_threshold = 0.7
@@ -50,7 +52,8 @@ class AttentionTrackingService:
                 return {"error": "Failed to decode frame"}
             
             # Detect face and eyes
-            faces = self.face_cascade.detectMultiScale(frame, 1.1, 5)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = self.face_cascade.detectMultiScale(gray, 1.1, 5)
             
             if len(faces) == 0:
                 return {
@@ -64,16 +67,20 @@ class AttentionTrackingService:
             
             # Process largest face
             (x, y, w, h) = max(faces, key=lambda face: face[2] * face[3])
-            face_roi = frame[y:y+h, x:x+w]
-            
+            face_roi_color = frame[y:y+h, x:x+w]
+            face_roi_gray = gray[y:y+h, x:x+w]
+
+            # Detect eyes in face ROI
+            eyes = self._detect_eyes(face_roi_gray)
+
             # Track eyes and blinks
-            blink_data = self.blink_detector.analyze_blinks(face_roi)
-            
+            blink_data = self.blink_detector.analyze_blinks(face_roi_color, face_roi_gray, eyes)
+
             # Track gaze direction
-            gaze_data = self.gaze_tracker.estimate_gaze(face_roi)
-            
+            gaze_data = self.gaze_tracker.estimate_gaze(face_roi_color, face_roi_gray, eyes)
+
             # Estimate head pose
-            head_pose = self.head_pose_estimator.estimate_pose(face_roi)
+            head_pose = self.head_pose_estimator.estimate_pose(face_roi_color, face_roi_gray, eyes)
             
             # Calculate attention score
             attention_score = self._calculate_attention_score(blink_data, gaze_data, head_pose)
@@ -128,6 +135,18 @@ class AttentionTrackingService:
         except Exception as e:
             logger.error(f"Failed to decode frame: {e}")
             return None
+
+    def _detect_eyes(self, face_roi_gray: np.ndarray) -> List[Tuple[int, int, int, int]]:
+        """Detect eyes within the face ROI using Haar cascade and return up to two eyes sorted by x."""
+        try:
+            eyes = self.eye_cascade.detectMultiScale(face_roi_gray, 1.1, 10)
+            # Keep top two eyes with largest width and sort left->right
+            eyes = sorted(eyes, key=lambda e: -e[2])[:2]
+            eyes = sorted(eyes, key=lambda e: e[0])
+            return eyes
+        except Exception as e:
+            logger.error(f"Eye detection failed: {e}")
+            return []
     
     def _calculate_attention_score(self, blink_data: Dict, gaze_data: Dict, head_pose: Dict) -> float:
         """Calculate overall attention score from multiple indicators"""
@@ -237,36 +256,45 @@ class BlinkDetector:
         self.blink_history = []
         self.eye_aspect_ratio_threshold = 0.25
     
-    def analyze_blinks(self, face_roi: np.ndarray) -> Dict:
-        """Analyze blink patterns in face region"""
+    def analyze_blinks(self, face_roi_color: np.ndarray, face_roi_gray: np.ndarray, eyes: List[Tuple[int,int,int,int]]) -> Dict:
+        """Analyze blink patterns using eye openness ratio from eye ROIs."""
         try:
-            # Simplified blink detection - in real implementation would use dlib landmarks
-            gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
-            
-            # Mock blink detection for demonstration
             current_time = datetime.now()
-            
-            # Simulate blink detection
-            blink_detected = np.random.random() < 0.1  # 10% chance of blink per frame
-            
+            # Compute openness per detected eye as height/width of bright region after thresholding
+            openness_vals = []
+            for (ex, ey, ew, eh) in eyes:
+                eye_roi = face_roi_gray[ey:ey+eh, ex:ex+ew]
+                if eye_roi.size == 0:
+                    continue
+                eye_blur = cv2.GaussianBlur(eye_roi, (5,5), 0)
+                # adaptive threshold to segment sclera/eyelid vs dark pupil/iris
+                thr = cv2.adaptiveThreshold(eye_blur, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 15, 5)
+                # proportion of white pixels vertically -> openness estimate
+                white_ratio = float(np.mean(thr == 255))
+                # approximate openness using white ratio scaled
+                openness = max(0.0, min(1.0, white_ratio * 1.5))
+                # fallback to height/width if threshold unstable
+                if np.isnan(openness) or openness == 0:
+                    openness = min(1.0, eh / (ew + 1e-6))
+                openness_vals.append(openness)
+
+            avg_open = float(np.mean(openness_vals)) if openness_vals else 0.0
+            blink_detected = avg_open < 0.25
             if blink_detected:
                 self.blink_history.append(current_time)
-            
-            # Calculate blink rate (blinks per minute)
+
             one_minute_ago = current_time - timedelta(minutes=1)
             recent_blinks = [b for b in self.blink_history if b > one_minute_ago]
             blink_rate = len(recent_blinks)
-            
-            # Clean old blinks
             self.blink_history = recent_blinks
-            
+
             return {
                 "rate": blink_rate,
                 "detected": blink_detected,
-                "eye_openness": np.random.uniform(0.7, 1.0),  # Mock eye openness
-                "fatigue_indicator": blink_rate > 20
+                "eye_openness": avg_open,
+                "fatigue_indicator": blink_rate > 20,
             }
-            
+        
         except Exception as e:
             logger.error(f"Blink analysis failed: {e}")
             return {"rate": 15, "detected": False, "eye_openness": 0.8, "fatigue_indicator": False}
@@ -278,16 +306,42 @@ class GazeTracker:
     def __init__(self):
         self.gaze_history = []
     
-    def estimate_gaze(self, face_roi: np.ndarray) -> Dict:
-        """Estimate gaze direction from face region"""
+    def estimate_gaze(self, face_roi_color: np.ndarray, face_roi_gray: np.ndarray, eyes: List[Tuple[int,int,int,int]]) -> Dict:
+        """Estimate gaze direction using pupil center offset within eye region."""
         try:
-            # Simplified gaze estimation - real implementation would use eye landmarks
-            
-            # Mock gaze estimation
-            horizontal_angle = np.random.uniform(-15, 15)  # degrees
-            vertical_angle = np.random.uniform(-10, 10)    # degrees
-            
-            # Determine gaze direction
+            centers = []
+            boxes = []
+            for (ex, ey, ew, eh) in eyes:
+                eye_roi = face_roi_gray[ey:ey+eh, ex:ex+ew]
+                if eye_roi.size == 0:
+                    continue
+                eye_blur = cv2.GaussianBlur(eye_roi, (7,7), 0)
+                # Invert for pupil as bright blob after threshold
+                _, thr = cv2.threshold(eye_blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                thr = cv2.morphologyEx(thr, cv2.MORPH_OPEN, np.ones((3,3), np.uint8), iterations=1)
+                contours, _ = cv2.findContours(thr, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if not contours:
+                    continue
+                cnt = max(contours, key=cv2.contourArea)
+                (cx, cy), r = cv2.minEnclosingCircle(cnt)
+                centers.append((cx, cy))
+                boxes.append((ex, ey, ew, eh))
+
+            if len(centers) >= 1 and len(boxes) >= 1:
+                # Use average normalized offsets from eye centers
+                x_offs = []
+                y_offs = []
+                for (cx, cy), (ex, ey, ew, eh) in zip(centers, boxes):
+                    x_offs.append((cx / (ew + 1e-6)) - 0.5)
+                    y_offs.append((cy / (eh + 1e-6)) - 0.5)
+                x_off = float(np.mean(x_offs)) if x_offs else 0.0
+                y_off = float(np.mean(y_offs)) if y_offs else 0.0
+                horizontal_angle = x_off * 60.0
+                vertical_angle = y_off * 40.0
+            else:
+                horizontal_angle = 0.0
+                vertical_angle = 0.0
+
             if abs(horizontal_angle) < 5 and abs(vertical_angle) < 5:
                 direction = "center"
             elif horizontal_angle > 5:
@@ -295,18 +349,17 @@ class GazeTracker:
             elif horizontal_angle < -5:
                 direction = "left"
             elif vertical_angle > 5:
-                direction = "up"
+                direction = "down"  # positive y means down in image coordinates
             else:
-                direction = "down"
-            
-            confidence = 1.0 - (abs(horizontal_angle) + abs(vertical_angle)) / 50
-            
+                direction = "up"
+
+            confidence = float(max(0, 1.0 - (abs(horizontal_angle)/60 + abs(vertical_angle)/40)))
             return {
                 "direction": direction,
-                "horizontal_angle": horizontal_angle,
-                "vertical_angle": vertical_angle,
-                "confidence": max(0, min(1, confidence)),
-                "on_screen": abs(horizontal_angle) < 30 and abs(vertical_angle) < 20
+                "horizontal_angle": float(horizontal_angle),
+                "vertical_angle": float(vertical_angle),
+                "confidence": confidence,
+                "on_screen": abs(horizontal_angle) < 30 and abs(vertical_angle) < 20,
             }
             
         except Exception as e:
@@ -326,29 +379,43 @@ class HeadPoseEstimator:
     def __init__(self):
         self.pose_history = []
     
-    def estimate_pose(self, face_roi: np.ndarray) -> Dict:
-        """Estimate head pose angles"""
+    def estimate_pose(self, face_roi_color: np.ndarray, face_roi_gray: np.ndarray, eyes: List[Tuple[int,int,int,int]]) -> Dict:
+        """Estimate head pose heuristically using eye geometry: roll from eye-line angle, yaw from eye width asymmetry, pitch from eye vertical placement."""
         try:
-            # Simplified head pose estimation
-            # Real implementation would use facial landmarks and PnP algorithm
-            
-            # Mock head pose estimation
-            pitch = np.random.uniform(-10, 10)  # Up/down rotation
-            yaw = np.random.uniform(-15, 15)    # Left/right rotation  
-            roll = np.random.uniform(-5, 5)     # Tilt rotation
-            
-            # Calculate engagement based on pose
+            h, w = face_roi_gray.shape[:2]
+            pitch = 0.0
+            yaw = 0.0
+            roll = 0.0
+
+            if len(eyes) >= 2:
+                (x1, y1, w1, h1), (x2, y2, w2, h2) = eyes[:2]
+                # Eye centers
+                c1 = (x1 + w1/2.0, y1 + h1/2.0)
+                c2 = (x2 + w2/2.0, y2 + h2/2.0)
+                # Roll from eye-line angle
+                roll = math.degrees(math.atan2(c2[1]-c1[1], c2[0]-c1[0]))
+                # Yaw from eye width asymmetry (larger apparent width ~ closer eye)
+                yaw = float((w2 - w1) / (max(w1, w2) + 1e-6)) * 25.0
+                # Pitch from vertical placement of eyes within face box
+                eye_avg_y = (c1[1] + c2[1]) / 2.0
+                norm_y = (eye_avg_y / (h + 1e-6)) - 0.5
+                pitch = float(-norm_y * 40.0)
+            else:
+                # With one or zero eyes, fall back to zero angles
+                pitch = 0.0
+                yaw = 0.0
+                roll = 0.0
+
             pose_deviation = abs(pitch) + abs(yaw) + abs(roll)
             engagement_score = max(0, 100 - pose_deviation * 2)
-            
             return {
-                "pitch": pitch,
-                "yaw": yaw,
-                "roll": roll,
-                "engagement_score": engagement_score,
-                "facing_camera": abs(yaw) < 20 and abs(pitch) < 15
+                "pitch": float(pitch),
+                "yaw": float(yaw),
+                "roll": float(roll),
+                "engagement_score": float(engagement_score),
+                "facing_camera": abs(yaw) < 20 and abs(pitch) < 15,
             }
-            
+        
         except Exception as e:
             logger.error(f"Head pose estimation failed: {e}")
             return {
@@ -358,3 +425,6 @@ class HeadPoseEstimator:
                 "engagement_score": 75,
                 "facing_camera": True
             }
+
+
+# MediaPipe integration removed for this build (protobuf conflicts). OpenCV-only approach implemented above.
