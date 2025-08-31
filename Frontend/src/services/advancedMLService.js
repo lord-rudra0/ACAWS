@@ -1,7 +1,7 @@
 import * as tf from '@tensorflow/tfjs'
 import * as faceapi from 'face-api.js'
 import { Matrix } from 'ml-matrix'
-import Brain from 'brain.js'
+import * as brain from 'brain.js'
 
 class AdvancedMLService {
   constructor() {
@@ -127,7 +127,7 @@ class AdvancedMLService {
         tf.layers.dropout({ rate: 0.25 }),
         
         // Attention mechanism
-        tf.layers.globalAveragePooling2d(),
+        tf.layers.globalAveragePooling2d({}),
         tf.layers.dense({ units: 512, activation: 'relu' }),
         tf.layers.dropout({ rate: 0.5 }),
         tf.layers.dense({ units: 256, activation: 'relu' }),
@@ -234,22 +234,29 @@ class AdvancedMLService {
 
   async initializeBrainJSNetworks() {
     try {
+      // Support different module export shapes (namespace ESM vs default CJS)
+      const NN = brain?.NeuralNetwork || brain?.default?.NeuralNetwork
+      const RNN = (brain?.recurrent) || (brain?.default?.recurrent)
+      if (!NN || !RNN) {
+        throw new Error('Brain.js constructors not available (NeuralNetwork/recurrent)')
+      }
+
       // Learning Performance Predictor
-      this.neuralNetworks.learningPredictor = new Brain.NeuralNetwork({
+      this.neuralNetworks.learningPredictor = new NN({
         hiddenLayers: [20, 15, 10],
         activation: 'sigmoid',
         learningRate: 0.01
       })
 
       // Adaptive Content Engine
-      this.neuralNetworks.adaptationEngine = new Brain.NeuralNetwork({
+      this.neuralNetworks.adaptationEngine = new NN({
         hiddenLayers: [15, 10, 8],
         activation: 'relu',
         learningRate: 0.005
       })
 
       // Wellness Pattern Analyzer
-      this.neuralNetworks.wellnessAnalyzer = new Brain.recurrent.LSTM({
+      this.neuralNetworks.wellnessAnalyzer = new RNN.LSTM({
         hiddenLayers: [20, 15],
         learningRate: 0.01
       })
@@ -710,15 +717,41 @@ class AdvancedMLService {
       // Prepare features for prediction
       const features = this.preparePredictionFeatures(studentData, moduleData, cognitiveHistory)
       
-      // Use TensorFlow model for prediction
-      const prediction = await this.models.performance.predict(tf.tensor2d([features])).data()
+      // If models failed to initialize, provide a heuristic-based fallback immediately
+      const tfModel = this.models?.performance
+      const brainNet = this.neuralNetworks?.learningPredictor
       
-      // Use Brain.js for additional insights
-      const brainPrediction = this.neuralNetworks.learningPredictor.run(features)
+      let tfScore = null
+      if (tfModel && typeof tfModel.predict === 'function') {
+        try {
+          const tensor = tf.tensor2d([features])
+          const out = await tfModel.predict(tensor).data()
+          tfScore = Array.isArray(out) ? out[0] : out
+        } catch (e) {
+          console.warn('TF prediction fallback due to error:', e)
+        }
+      }
+
+      let brainScore = null
+      if (brainNet && typeof brainNet.run === 'function') {
+        try {
+          // brain.js expects normalized input; we pass features vector directly
+          brainScore = brainNet.run(features)
+          // Some configs return object; coerce to number if needed
+          if (brainScore && typeof brainScore === 'object') {
+            const vals = Object.values(brainScore)
+            brainScore = vals.length ? vals[0] : null
+          }
+        } catch (e) {
+          console.warn('Brain.js prediction fallback due to error:', e)
+        }
+      }
+
+      // Final score selection with graceful fallback
+      const heuristic = this.simpleHeuristicScore(features)
+      const combinedScore = this.combineScores(tfScore, brainScore, heuristic)
       
       // Combine predictions
-      const combinedScore = (prediction[0] + brainPrediction) / 2
-      
       return {
         predictedScore: combinedScore * 100,
         confidence: this.calculatePredictionConfidence(features),
@@ -731,6 +764,25 @@ class AdvancedMLService {
       console.error('Learning outcome prediction failed:', error)
       return this.getFallbackPrediction()
     }
+  }
+
+  simpleHeuristicScore(features) {
+    // Heuristic using attention, performance, engagement (indices 0,1,8)
+    const a = Number(features[0] ?? 0.5)
+    const p = Number(features[1] ?? 0.7)
+    const e = Number(features[8] ?? 0.5)
+    return Math.max(0, Math.min(1, 0.5 * p + 0.3 * a + 0.2 * e))
+  }
+
+  combineScores(tfScore, brainScore, heuristic) {
+    const scores = [tfScore, brainScore, heuristic].filter(v => typeof v === 'number' && !isNaN(v))
+    if (scores.length === 0) return 0.75 // stable default
+    // Weighted average: prefer TF then brain, then heuristic
+    const weights = scores.map((v, i) => (i === 0 ? 0.5 : i === 1 ? 0.3 : 0.2))
+    // If fewer than 3 scores, re-normalize weights
+    const sumW = weights.slice(0, scores.length).reduce((a, b) => a + b, 0)
+    const normW = weights.slice(0, scores.length).map(w => w / sumW)
+    return scores.reduce((acc, v, i) => acc + v * normW[i], 0)
   }
 
   preparePredictionFeatures(studentData, moduleData, cognitiveHistory) {

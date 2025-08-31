@@ -99,6 +99,11 @@ export const useAIFeatures = (userId, initialContext = {}) => {
   const initializeGemini = async () => {
     // Gemini service initialization
     try {
+      const pingOnStart = String(import.meta.env.VITE_GEMINI_PING_ON_START || 'false').toLowerCase() === 'true'
+      if (!pingOnStart) {
+        // Skip quota-consuming probe unless explicitly enabled
+        return Promise.resolve()
+      }
       await geminiService.generatePersonalizedExplanation(
         'test',
         { learningStyle: 'visual' },
@@ -361,10 +366,12 @@ export const useAIFeatures = (userId, initialContext = {}) => {
         { currentState },
         [currentState]
       )
+      // Normalize to array to avoid TypeError and incorrect spread
+      const raw = insights?.insights
+      const list = Array.isArray(raw) ? raw : (raw ? [raw] : [])
+      setAiInsights(prev => [...prev.slice(-9), ...list])
       
-      setAiInsights(prev => [...prev.slice(-9), ...insights.insights || []])
-      
-      return insights
+      return { ...insights, insights: list }
     } catch (error) {
       console.error('Real-time insights generation failed:', error)
       return { insights: [] }

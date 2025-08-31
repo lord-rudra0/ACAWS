@@ -2,21 +2,71 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 
 class GeminiService {
   constructor() {
-    this.genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY)
-    this.model = this.genAI.getGenerativeModel({ model: 'gemini-pro' })
-    this.visionModel = this.genAI.getGenerativeModel({ model: 'gemini-pro-vision' })
+    this.useBackend = String(import.meta.env.VITE_USE_BACKEND_GEMINI).toLowerCase() === 'true'
+    this.apiBase = import.meta.env.VITE_API_URL
+
+    if (!this.useBackend) {
+      const apiKey = import.meta.env.VITE_GEMINI_API_KEY
+      if (!apiKey || apiKey === 'your_gemini_api_key_here') {
+        console.error('GeminiService: Missing/invalid VITE_GEMINI_API_KEY. Either set it in Frontend/.env or enable VITE_USE_BACKEND_GEMINI=true to proxy via Express.')
+        throw new Error('Gemini API key not configured')
+      }
+      this.genAI = new GoogleGenerativeAI(apiKey)
+      // Use unified modern model IDs; 1.5-flash supports text and multimodal
+      this.model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
+      this.visionModel = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' })
+    }
     this.conversationHistory = new Map()
+  }
+
+  getTimeoutMs() {
+    const val = Number(import.meta.env.VITE_GEMINI_TIMEOUT_MS)
+    return Number.isFinite(val) && val > 0 ? val : 30000
+  }
+
+  // Unified text generation path: uses backend proxy when enabled
+  async generateText(prompt, { model = 'gemini-1.5-flash', systemInstruction, generationConfig } = {}) {
+    if (this.useBackend) {
+      if (!this.apiBase) {
+        throw new Error('VITE_API_URL not set. Required when VITE_USE_BACKEND_GEMINI=true')
+      }
+      const token = localStorage.getItem('token')
+      const headers = { 'Content-Type': 'application/json' }
+      if (token) headers['Authorization'] = `Bearer ${token}`
+
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), this.getTimeoutMs())
+      const res = await fetch(`${this.apiBase}/api/ai/gemini`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ prompt, model, generationConfig, systemInstruction }),
+        signal: controller.signal
+      }).finally(() => clearTimeout(timeoutId))
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        throw new Error(`Backend Gemini call failed: ${res.status} ${res.statusText} ${text}`)
+      }
+      const data = await res.json()
+      return data?.output || ''
+    }
+
+    // Fallback to direct SDK usage when not proxying
+    const result = await Promise.race([
+      this.model.generateContent(prompt),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Gemini request timed out')), this.getTimeoutMs()))
+    ])
+    const response = await result.response
+    return response.text()
   }
 
   async generatePersonalizedExplanation(topic, userProfile, cognitiveState) {
     try {
       const prompt = this.buildExplanationPrompt(topic, userProfile, cognitiveState)
-      const result = await this.model.generateContent(prompt)
-      const response = await result.response
+      const text = await this.generateText(prompt)
       
       return {
-        explanation: response.text(),
-        adaptations: this.extractAdaptations(response.text()),
+        explanation: text,
+        adaptations: this.extractAdaptations(text),
         confidence: 0.9,
         timestamp: new Date().toISOString()
       }
@@ -46,14 +96,12 @@ class GeminiService {
         
         Format as JSON with detailed module descriptions.
       `
-      
-      const result = await this.model.generateContent(prompt)
-      const response = await result.response
+      const text = await this.generateText(prompt)
       
       return {
-        learningPath: this.parseLearningPath(response.text()),
-        estimatedDuration: this.calculatePathDuration(response.text()),
-        adaptiveCheckpoints: this.extractCheckpoints(response.text()),
+        learningPath: this.parseLearningPath(text),
+        estimatedDuration: this.calculatePathDuration(text),
+        adaptiveCheckpoints: this.extractCheckpoints(text),
         timestamp: new Date().toISOString()
       }
     } catch (error) {
@@ -79,15 +127,13 @@ class GeminiService {
         
         Be specific and actionable in your recommendations.
       `
-      
-      const result = await this.model.generateContent(prompt)
-      const response = await result.response
+      const text = await this.generateText(prompt)
       
       return {
-        analysis: response.text(),
-        insights: this.extractInsights(response.text()),
-        recommendations: this.extractRecommendations(response.text()),
-        riskFactors: this.extractRiskFactors(response.text()),
+        analysis: text,
+        insights: this.extractInsights(text),
+        recommendations: this.extractRecommendations(text),
+        riskFactors: this.extractRiskFactors(text),
         timestamp: new Date().toISOString()
       }
     } catch (error) {
@@ -99,14 +145,12 @@ class GeminiService {
   async generateQuizQuestions(topic, difficulty, cognitiveState, count = 5) {
     try {
       const adaptivePrompt = this.buildQuizPrompt(topic, difficulty, cognitiveState, count)
-      
-      const result = await this.model.generateContent(adaptivePrompt)
-      const response = await result.response
+      const text = await this.generateText(adaptivePrompt)
       
       return {
-        questions: this.parseQuizQuestions(response.text()),
+        questions: this.parseQuizQuestions(text),
         adaptedDifficulty: this.determineDifficulty(cognitiveState),
-        explanations: this.extractExplanations(response.text()),
+        explanations: this.extractExplanations(text),
         timestamp: new Date().toISOString()
       }
     } catch (error) {
@@ -136,18 +180,16 @@ class GeminiService {
         
         Adapt your response based on the student's cognitive state and learning style.
       `
-      
-      const result = await this.model.generateContent(prompt)
-      const response = await result.response
+      const text = await this.generateText(prompt)
       
       // Update conversation history
-      history.push({ question, response: response.text(), timestamp: new Date() })
+      history.push({ question, response: text, timestamp: new Date() })
       this.conversationHistory.set(conversationId, history)
       
       return {
-        response: response.text(),
-        followUpQuestions: this.extractFollowUpQuestions(response.text()),
-        resources: this.extractResources(response.text()),
+        response: text,
+        followUpQuestions: this.extractFollowUpQuestions(text),
+        resources: this.extractResources(text),
         confidence: 0.85,
         timestamp: new Date().toISOString()
       }
@@ -159,6 +201,36 @@ class GeminiService {
 
   async analyzeImageContent(imageData, context) {
     try {
+      if (this.useBackend) {
+        if (!this.apiBase) {
+          throw new Error('VITE_API_URL not set. Required when VITE_USE_BACKEND_GEMINI=true')
+        }
+        const token = localStorage.getItem('token')
+        const headers = { 'Content-Type': 'application/json' }
+        if (token) headers['Authorization'] = `Bearer ${token}`
+
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), this.getTimeoutMs())
+        const res = await fetch(`${this.apiBase}/api/ai/gemini-vision`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ imageData, context, model: 'gemini-1.5-flash' }),
+          signal: controller.signal
+        }).finally(() => clearTimeout(timeoutId))
+        if (!res.ok) {
+          const text = await res.text().catch(() => '')
+          throw new Error(`Backend Gemini vision call failed: ${res.status} ${res.statusText} ${text}`)
+        }
+        const data = await res.json()
+        const analysisText = data?.output || ''
+        return {
+          analysis: analysisText,
+          concepts: this.extractConcepts(analysisText),
+          discussionPoints: this.extractDiscussionPoints(analysisText),
+          relatedTopics: this.extractRelatedTopics(analysisText),
+          timestamp: new Date().toISOString()
+        }
+      }
       const prompt = `
         Analyze this educational image and provide learning insights:
         
@@ -179,7 +251,10 @@ class GeminiService {
         }
       }
       
-      const result = await this.visionModel.generateContent([prompt, imagePart])
+      const result = await Promise.race([
+        this.visionModel.generateContent([prompt, imagePart]),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Gemini vision request timed out')), this.getTimeoutMs()))
+      ])
       const response = await result.response
       
       return {
@@ -210,15 +285,13 @@ class GeminiService {
         4. Early warning signs to watch for
         5. Optimal study-wellness balance strategies
       `
-      
-      const result = await this.model.generateContent(prompt)
-      const response = await result.response
+      const text = await this.generateText(prompt)
       
       return {
-        insights: response.text(),
-        recommendations: this.extractWellnessRecommendations(response.text()),
-        correlations: this.extractCorrelations(response.text()),
-        warnings: this.extractWarnings(response.text()),
+        insights: text,
+        recommendations: this.extractWellnessRecommendations(text),
+        correlations: this.extractCorrelations(text),
+        warnings: this.extractWarnings(text),
         timestamp: new Date().toISOString()
       }
     } catch (error) {

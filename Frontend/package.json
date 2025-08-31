@@ -10,7 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@google/generative-ai": "0.2.1",
+    "@google/generative-ai": "^0.24.1",
     "@tensorflow/tfjs": "4.15.0",
     "face-api.js": "0.22.2",
   "ml-matrix": "6.10.7",
