@@ -32,6 +32,10 @@ From each folder:
 ```bash
 npm install
 npm run dev   # or: node server.js
+
+## Troubleshooting
+If you get any errors, check the folder-specific README:
+  - `Express-backend/README.md`
 ```
 
 – Python-backend
@@ -40,6 +44,10 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app:app --reload
+
+## Troubleshooting
+If you get any errors, check the folder-specific README:
+  - `Python-backend/README.md`
 ```
 
 – Frontend
@@ -47,6 +55,9 @@ uvicorn app:app --reload
 npm install
 npm run dev   # or: npm start
 ```
+## Troubleshooting
+If you get any errors, check the folder-specific README:
+  - `Frontend/README.md`
 
 ## Ports and URLs (defaults)
 - Express API: http://localhost:3001 (or as defined in its README)
@@ -55,10 +66,7 @@ npm run dev   # or: npm start
 
 Ensure the Frontend config points to the running backend URLs.
 
-## Troubleshooting
-- If you hit errors while starting any service, check the folder-specific README:
-  - `Express-backend/README.md`
-  - `Python-backend/README.md`
-  - `Frontend/README.md`
+
+
 
 Also confirm env variables are set in the correct `.env` files and that MongoDB is running.

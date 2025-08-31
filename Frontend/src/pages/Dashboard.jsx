@@ -24,8 +24,10 @@ import {
   Pie,
   Cell
 } from 'recharts'
+import { useAuth } from '../contexts/AuthContext'
 
 const Dashboard = () => {
+  const { user } = useAuth()
   const [userData, setUserData] = useState({
     name: 'John Doe',
     wellnessScore: 85,
@@ -33,6 +35,13 @@ const Dashboard = () => {
     learningProgress: 92,
     streakDays: 7
   })
+
+  // Sync name from auth user when available
+  useEffect(() => {
+    if (user && user.name) {
+      setUserData(prev => ({ ...prev, name: user.name }))
+    }
+  }, [user])
 
   const [weeklyData] = useState([
     { day: 'Mon', attention: 85, mood: 7, focus: 90 },

@@ -14,7 +14,8 @@ import {
   Clock,
   Eye,
   ThumbsUp,
-  Send
+  Send,
+  Target
 } from 'lucide-react'
 
 const Community = () => {
