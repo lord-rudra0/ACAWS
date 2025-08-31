@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Webcam from 'react-webcam'
 import { Camera, Eye, Brain, Heart, Zap, Settings, AlertTriangle, Target, Activity } from 'lucide-react'
 import advancedMLService from '../services/advancedMLService'
@@ -96,6 +96,24 @@ const EnhancedCameraAnalysis = ({
       // Advanced cognitive state calculation
       const advancedCognitiveState = calculateAdvancedCognitiveState(emotion, attention, fatigue)
 
+      // Update histories for trend/fatigue
+      if (typeof attention?.attentionScore === 'number') {
+        attentionHistoryRef.current.push(attention.attentionScore)
+        if (attentionHistoryRef.current.length > MAX_HISTORY) attentionHistoryRef.current.shift()
+        // sync module-level history for getTrendDirection helper
+        attentionScoreHistory = attentionHistoryRef.current.slice()
+      }
+      const ear = attention?.eyeMetrics?.averageEAR ?? (
+        typeof attention?.eyeMetrics?.leftEAR === 'number' && typeof attention?.eyeMetrics?.rightEAR === 'number'
+          ? (attention.eyeMetrics.leftEAR + attention.eyeMetrics.rightEAR) / 2
+          : null
+      )
+      const mar = attention?.eyeMetrics?.mouthAspectRatio ?? null
+      eyeMetricsHistoryRef.current.push({ t: Date.now(), ear, mar })
+      // cap history to 60s window
+      const cutoff = Date.now() - 60000
+      eyeMetricsHistoryRef.current = eyeMetricsHistoryRef.current.filter(e => e.t >= cutoff)
+
       setAnalysisData({
         emotion,
         attention,
@@ -137,18 +155,82 @@ const EnhancedCameraAnalysis = ({
     }
   }, [isActive, analysisMode, visualizations, onCognitiveStateUpdate, onAdvancedInsights, onError, isAnalyzing, userProfile])
 
-  const analyzeFatigueAdvanced = async (imageData) => {
-    // Enhanced fatigue detection with multiple indicators
+  // In-memory histories for trend/fatigue (module-level alternatives defined below)
+  const MAX_HISTORY = 10
+  const attentionHistoryRef = useRef([])
+  const eyeMetricsHistoryRef = useRef([])
+
+  const analyzeFatigueAdvanced = async () => {
+    // Compute fatigue from recent eye metrics history (EAR/MAR)
+    const now = Date.now()
+    const windowMs = 60000 // 60s window
+    const recent = eyeMetricsHistoryRef.current.filter(e => now - e.t <= windowMs && e.ear != null)
+    if (recent.length < 3) {
+      return {
+        fatigueScore: null,
+        indicators: {
+          eyeClosureDuration: null,
+          blinkFrequency: null,
+          microSleep: false,
+          yawnDetected: null
+        },
+        recommendations: [],
+        confidence: 0.0
+      }
+    }
+
+    // Detect blinks and closures using EAR threshold
+    const EAR_THRESH = 0.21
+    let blinks = 0
+    let lowStart = null
+    const lowDurations = []
+    for (let i = 0; i < recent.length; i++) {
+      const currLow = recent[i].ear < EAR_THRESH
+      const prevLow = i > 0 ? recent[i - 1].ear < EAR_THRESH : false
+      if (currLow && !prevLow) {
+        lowStart = recent[i].t
+      } else if (!currLow && prevLow && lowStart != null) {
+        const dur = recent[i].t - lowStart
+        lowDurations.push(dur)
+        // Blink if duration within blink bounds
+        if (dur >= 80 && dur <= 800) blinks += 1
+        lowStart = null
+      }
+    }
+    // If still low at end, close the span
+    if (lowStart != null) {
+      const dur = recent[recent.length - 1].t - lowStart
+      lowDurations.push(dur)
+    }
+
+    const windowSec = Math.max(1, windowMs / 1000)
+    const blinkPerMin = blinks * (60 / windowSec)
+    const avgClosureMs = lowDurations.length ? lowDurations.reduce((a, b) => a + b, 0) / lowDurations.length : 0
+    const microSleep = lowDurations.some(d => d > 1500)
+
+    // Yawn detection via MAR if available: sustained high MAR in last 5s
+    const recent5s = eyeMetricsHistoryRef.current.filter(e => now - e.t <= 5000 && e.mar != null)
+    const yawnDetected = recent5s.length ? recent5s.some(e => e.mar > 0.7) : null
+
+    // Heuristic fatigue score 0-100
+    let fatigue = 0
+    if (blinkPerMin > 25) fatigue += 30
+    if (blinkPerMin > 35) fatigue += 20
+    if (avgClosureMs > 300) fatigue += 20
+    if (avgClosureMs > 600) fatigue += 20
+    if (microSleep) fatigue += 20
+    fatigue = Math.max(0, Math.min(100, fatigue))
+
     return {
-      fatigueScore: Math.random() * 100,
+      fatigueScore: fatigue,
       indicators: {
-        eyeClosureDuration: Math.random() * 0.5,
-        blinkFrequency: Math.random() * 20 + 10,
-        microSleep: Math.random() < 0.1,
-        yawnDetected: Math.random() < 0.05
+        eyeClosureDuration: avgClosureMs / 1000, // seconds
+        blinkFrequency: Math.round(blinkPerMin),
+        microSleep,
+        yawnDetected
       },
-      recommendations: ['Take a 10-minute break', 'Do light stretching', 'Hydrate'],
-      confidence: 0.8
+      recommendations: fatigue > 60 ? ['Take a short break', 'Hydrate', 'Do light stretching'] : [],
+      confidence: recent.length >= 10 ? 0.8 : 0.6
     }
   }
 
@@ -510,7 +592,7 @@ const EnhancedCameraAnalysis = ({
               value: analysisData.attention?.engagementLevel != null ? analysisData.attention.engagementLevel * 100 : null,
               icon: Zap,
               color: 'green',
-              advanced: calculateEngagementQuality(),
+              advanced: calculateEngagementQuality(analysisData.attention),
               unit: '%'
             },
             {
@@ -678,13 +760,36 @@ const EnhancedCameraAnalysis = ({
 }
 
 // Helper function
-const calculateEngagementQuality = () => {
-  return Math.random() * 40 + 60 // Mock calculation
+const calculateEngagementQuality = (attention) => {
+  if (!attention) return null
+  const score = typeof attention.attentionScore === 'number' ? attention.attentionScore : null
+  const conf = typeof attention?.gazeAnalysis?.confidence === 'number' ? attention.gazeAnalysis.confidence * 100 : null
+  const stability = typeof attention?.focusMap?.focusStability === 'number' ? attention.focusMap.focusStability : null
+  const parts = [
+    score != null ? { v: score, w: 0.6 } : null,
+    conf != null ? { v: conf, w: 0.2 } : null,
+    stability != null ? { v: stability, w: 0.2 } : null
+  ].filter(Boolean)
+  if (!parts.length) return null
+  const weighted = parts.reduce((acc, p) => acc + p.v * p.w, 0)
+  const totalW = parts.reduce((acc, p) => acc + p.w, 0)
+  return Math.max(0, Math.min(100, weighted / totalW))
 }
 
-const getTrendDirection = (metric) => {
-  const trends = ['↗️ Rising', '↘️ Falling', '→ Stable']
-  return trends[Math.floor(Math.random() * trends.length)]
+// Attention trend from moving averages of last 10 scores
+const getTrendDirection = () => {
+  const hist = attentionScoreHistory
+  if (!hist || hist.length < 6) return '→ Stable'
+  const last3 = hist.slice(-3)
+  const prev3 = hist.slice(-6, -3)
+  const avg = arr => arr.reduce((a, b) => a + b, 0) / arr.length
+  const a1 = avg(prev3)
+  const a2 = avg(last3)
+  const diff = a2 - a1
+  const threshold = 2 // percentage points
+  if (diff > threshold) return '↗️ Rising'
+  if (diff < -threshold) return '↘️ Falling'
+  return '→ Stable'
 }
 
 // Display formatter: show '—' when null/undefined, else rounded with unit
@@ -692,5 +797,9 @@ const fmt = (value, unit = '') => {
   const isNil = value === null || value === undefined || Number.isNaN(value)
   return isNil ? '—' : `${Math.round(value)}${unit}`
 }
+
+// Module-level histories to support helper computations
+let attentionScoreHistory = []
+
 
 export default EnhancedCameraAnalysis

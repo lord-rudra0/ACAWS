@@ -34,6 +34,97 @@ router.get('/profile', asyncHandler(async (req, res) => {
   })
 }))
 
+// Get weekly activity for the authenticated user (self)
+router.get('/activity/self', requireRole(['student','educator','admin']), asyncHandler(async (req, res) => {
+  const userId = req.user.id
+  const { days = 7 } = req.query
+
+  const since = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000)
+
+  const learningAgg = await LearningSession.aggregate([
+    { $match: { user_id: new mongoose.Types.ObjectId(userId), started_at: { $gte: since } } },
+    { $project: {
+        date: { $dateToString: { format: '%Y-%m-%d', date: '$started_at' } },
+        duration: { $cond: [ { $and: ['$started_at', '$ended_at'] }, { $divide: [{ $subtract: ['$ended_at', '$started_at'] }, 1000 * 60] }, 0 ] },
+        attention_score: 1,
+        focus_level: 1,
+        wellness_score: 1
+    }},
+    { $group: {
+        _id: '$date',
+        sessions: { $sum: 1 },
+        avg_duration: { $avg: '$duration' },
+        avg_attention: { $avg: '$attention_score' },
+        avg_focus: { $avg: { $ifNull: ['$focus_level', '$attention_score'] } },
+        avg_wellness: { $avg: '$wellness_score' }
+    }},
+    { $project: { _id: 0, date: '$_id', sessions: 1, avg_duration: 1, avg_attention: 1, avg_focus: 1, avg_wellness: 1 } },
+    { $sort: { date: 1 } }
+  ])
+
+  const wellnessAgg = await WellnessEntry.aggregate([
+    { $match: { user_id: new mongoose.Types.ObjectId(userId), created_at: { $gte: since } } },
+    { $project: { date: { $dateToString: { format: '%Y-%m-%d', date: '$created_at' } }, mood_score: 1, stress_level: 1, energy_level: 1 } },
+    { $group: { _id: '$date', avg_mood: { $avg: '$mood_score' }, avg_stress: { $avg: '$stress_level' }, avg_energy: { $avg: '$energy_level' } } },
+    { $project: { _id: 0, date: '$_id', avg_mood: 1, avg_stress: 1, avg_energy: 1 } },
+    { $sort: { date: 1 } }
+  ])
+
+  res.json({
+    success: true,
+    activity: {
+      learning_sessions: learningAgg,
+      wellness_trends: wellnessAgg,
+      summary: {
+        total_days: Number(days),
+        data_points: learningAgg.length
+      }
+    }
+  })
+}))
+
+// Get current and best streak for the authenticated user
+router.get('/streak', requireRole(['student','educator','admin']), asyncHandler(async (req, res) => {
+  const userId = req.user.id
+  const daysToCheck = 60
+  const since = new Date(Date.now() - daysToCheck * 24 * 60 * 60 * 1000)
+
+  // Collect distinct active days from sessions and wellness entries
+  const sessionDays = await LearningSession.aggregate([
+    { $match: { user_id: new mongoose.Types.ObjectId(userId), started_at: { $gte: since } } },
+    { $project: { date: { $dateToString: { format: '%Y-%m-%d', date: '$started_at' } } } },
+    { $group: { _id: '$date' } }
+  ])
+  const wellnessDays = await WellnessEntry.aggregate([
+    { $match: { user_id: new mongoose.Types.ObjectId(userId), created_at: { $gte: since } } },
+    { $project: { date: { $dateToString: { format: '%Y-%m-%d', date: '$created_at' } } } },
+    { $group: { _id: '$date' } }
+  ])
+
+  const activeSet = new Set([...sessionDays.map(d => d._id), ...wellnessDays.map(d => d._id)])
+
+  let currentStreak = 0
+  let bestStreak = 0
+  let day = new Date()
+  for (let i = 0; i < daysToCheck; i++) {
+    const key = day.toISOString().slice(0, 10)
+    if (activeSet.has(key)) {
+      currentStreak += 1
+      bestStreak = Math.max(bestStreak, currentStreak)
+    } else {
+      // break only for current streak; continue to compute best
+      if (i === 0) {
+        currentStreak = 0
+      }
+      // reset streak for best calculation window
+      currentStreak = 0
+    }
+    day.setDate(day.getDate() - 1)
+  }
+
+  res.json({ success: true, streak: { current: currentStreak, best: bestStreak } })
+}))
+
 // Update user profile
 router.put('/profile', [
   body('name').optional().trim().isLength({ min: 2 }).withMessage('Name must be at least 2 characters'),

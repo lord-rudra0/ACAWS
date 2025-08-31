@@ -25,16 +25,20 @@ import {
   Cell
 } from 'recharts'
 import { useAuth } from '../contexts/AuthContext'
+import axios from 'axios'
 
 const Dashboard = () => {
   const { user } = useAuth()
+  const API_URL = import.meta.env.VITE_API_URL
   const [userData, setUserData] = useState({
-    name: 'John Doe',
-    wellnessScore: 85,
-    attentionLevel: 78,
-    learningProgress: 92,
-    streakDays: 7
+    name: '',
+    wellnessScore: null,
+    attentionLevel: null,
+    learningProgress: null,
+    streakDays: null
   })
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
 
   // Sync name from auth user when available
   useEffect(() => {
@@ -43,20 +47,12 @@ const Dashboard = () => {
     }
   }, [user])
 
-  const [weeklyData] = useState([
-    { day: 'Mon', attention: 85, mood: 7, focus: 90 },
-    { day: 'Tue', attention: 78, mood: 6, focus: 85 },
-    { day: 'Wed', attention: 92, mood: 8, focus: 95 },
-    { day: 'Thu', attention: 88, mood: 7, focus: 88 },
-    { day: 'Fri', attention: 85, mood: 8, focus: 90 },
-    { day: 'Sat', attention: 90, mood: 9, focus: 92 },
-    { day: 'Sun', attention: 87, mood: 8, focus: 89 }
-  ])
+  const [weeklyData, setWeeklyData] = useState([])
 
-  const [learningStats] = useState([
-    { name: 'Completed', value: 75, color: '#10B981' },
-    { name: 'In Progress', value: 20, color: '#3B82F6' },
-    { name: 'Not Started', value: 5, color: '#6B7280' }
+  const [learningStats, setLearningStats] = useState([
+    { name: 'Completed', value: 0, color: '#10B981' },
+    { name: 'In Progress', value: 0, color: '#3B82F6' },
+    { name: 'Not Started', value: 0, color: '#6B7280' }
   ])
 
   const quickActions = [
@@ -90,16 +86,73 @@ const Dashboard = () => {
     }
   ]
 
-  const achievements = [
-    { name: '7-Day Streak', earned: true, icon: '🔥' },
-    { name: 'Focus Master', earned: true, icon: '🎯' },
-    { name: 'Wellness Warrior', earned: false, icon: '💪' },
-    { name: 'Learning Legend', earned: false, icon: '🏆' }
-  ]
+  const [achievements, setAchievements] = useState([])
+
+  // Fetch dashboard data
+  useEffect(() => {
+    const fetchDashboard = async () => {
+      try {
+        setLoading(true)
+        setError(null)
+        const resp = await axios.get(`${API_URL}/api/analytics/dashboard-summary`)
+        const summary = resp.data?.summary || {}
+
+        // Key metrics
+        const wellnessScore = Number.isFinite(summary.wellnessScoreToday) ? Math.round(summary.wellnessScoreToday) : null
+        const attentionLevel = Number.isFinite(summary.attentionToday) ? Math.round(summary.attentionToday) : null
+
+        // Learning distribution -> percentages
+        const dist = summary.learningDistribution || {}
+        const total = Math.max(1, dist.total_modules || (dist.completed || 0) + (dist.in_progress || 0) + (dist.not_started || 0) || 1)
+        const completedPct = Math.round(((dist.completed || 0) / total) * 100)
+        const inProgressPct = Math.round(((dist.in_progress || 0) / total) * 100)
+        const notStartedPct = Math.max(0, 100 - completedPct - inProgressPct)
+        setLearningStats([
+          { name: 'Completed', value: completedPct, color: '#10B981' },
+          { name: 'In Progress', value: inProgressPct, color: '#3B82F6' },
+          { name: 'Not Started', value: notStartedPct, color: '#6B7280' }
+        ])
+
+        // Weekly performance mapping
+        const week = Array.isArray(summary.weeklyPerformance) ? summary.weeklyPerformance : []
+        const toDayLabel = (iso) => {
+          const d = new Date(iso)
+          return d.toLocaleDateString(undefined, { weekday: 'short' })
+        }
+        setWeeklyData(week.map(w => ({ day: toDayLabel(w.day), attention: Math.round(w.attention || 0), focus: Math.round(w.focus || 0) })))
+
+        // Streak and achievements
+        const streakDays = summary.streak?.current ?? null
+        setAchievements(Array.isArray(summary.achievements) ? summary.achievements : [])
+
+        setUserData(prev => ({
+          ...prev,
+          name: user?.name || prev.name || 'User',
+          wellnessScore,
+          attentionLevel,
+          learningProgress: completedPct, // overall completion proxy
+          streakDays
+        }))
+      } catch (e) {
+        setError(e?.response?.data?.message || e.message || 'Failed to load dashboard')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchDashboard()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [API_URL])
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-6">
       <div className="max-w-7xl mx-auto">
+        {loading && (
+          <div className="text-gray-600 dark:text-gray-300 mb-4">Loading dashboard…</div>
+        )}
+        {error && (
+          <div className="text-red-600 dark:text-red-400 mb-4">{error}</div>
+        )}
         {/* Welcome Header */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -161,7 +214,7 @@ const Dashboard = () => {
                     <Icon className="w-6 h-6" />
                   </div>
                   <span className={`text-2xl font-bold ${metric.color}`}>
-                    {metric.value}
+                    {metric.value ?? '—'}
                     {metric.suffix && (
                       <span className="text-sm font-normal ml-1">{metric.suffix}</span>
                     )}
