@@ -5,6 +5,7 @@ import mongoose from 'mongoose'
 import WellnessEntry from '../models/WellnessEntry.js'
 import DailyWellnessSummary from '../models/DailyWellnessSummary.js'
 import { query } from '../config/database.js'
+import fetch from 'node-fetch'
 
 const router = express.Router()
 
@@ -15,6 +16,51 @@ router.get('/test', (req, res) => {
     message: 'Wellness API is working!',
     timestamp: new Date().toISOString()
   })
+})
+
+// Test ML backend connection (no auth required)
+router.get('/test-ml-backend', async (req, res) => {
+  try {
+    console.log('🧪 Testing ML backend connection...')
+    
+    const response = await fetch('http://localhost:8000/health', {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' }
+    })
+    
+    if (response.ok) {
+      const healthData = await response.json()
+      res.json({
+        success: true,
+        message: 'ML backend is accessible!',
+        ml_backend_status: 'healthy',
+        ml_backend_url: 'http://localhost:8000',
+        ml_backend_health: healthData,
+        timestamp: new Date().toISOString()
+      })
+    } else {
+      res.json({
+        success: false,
+        message: 'ML backend responded but with error',
+        ml_backend_status: 'error',
+        ml_backend_url: 'http://localhost:8000',
+        response_status: response.status,
+        response_text: await response.text(),
+        timestamp: new Date().toISOString()
+      })
+    }
+  } catch (error) {
+    console.error('❌ ML backend test failed:', error)
+    res.json({
+      success: false,
+      message: 'ML backend is not accessible',
+      ml_backend_status: 'unavailable',
+      ml_backend_url: 'http://localhost:8000',
+      error: error.message,
+      error_type: error.name,
+      timestamp: new Date().toISOString()
+    })
+  }
 })
 
 // Record wellness entry (MongoDB)
@@ -32,7 +78,7 @@ router.post('/entries', [
     })
   }
 
-  const userId = req.user?.id || '000000000000000000000000' // Default user ID for development
+  const userId = (req.user && req.user && req.user.id) || '000000000000000000000000' // Default user ID for development
   const { 
     mood_score, 
     stress_level, 
@@ -83,7 +129,7 @@ router.post('/daily-summary', [
     return res.status(400).json({ success: false, message: 'Validation failed', errors: errors.array() })
   }
 
-  const userId = req.user?.id || '000000000000000000000000' // Default user ID for development
+  const userId = (req.user && req.user.id) || '000000000000000000000000' // Default user ID for development
   const { date, wellness_score, sessions, goals = [], goals_achieved, goals_total, avg_focus, tips_sample = [], meta } = req.body
 
   const update = {
@@ -110,7 +156,7 @@ router.post('/daily-summary', [
 
 // Get wellness history (MongoDB)
 router.get('/history', asyncHandler(async (req, res) => {
-  const userId = req.user.id
+  const userId = (req.user && req.user.id) || '000000000000000000000000' // Default user ID for development
   const { days = 30 } = req.query
 
   const since = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000)
@@ -152,7 +198,7 @@ router.get('/history', asyncHandler(async (req, res) => {
 
 // Get wellness insights
 router.get('/insights', asyncHandler(async (req, res) => {
-  const userId = req.user.id
+  const userId = (req.user && req.user.id) || '000000000000000000000000' // Default user ID for development
 
   // Mongo-only insights: last 7 days of wellness entries
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
@@ -182,7 +228,7 @@ router.get('/insights', asyncHandler(async (req, res) => {
 
 // Mood analytics aggregated by day over a time range
 router.get('/mood-analytics', asyncHandler(async (req, res) => {
-  const userId = req.user.id
+  const userId = (req.user && req.user.id) || '000000000000000000000000' // Default user ID for development
   const { time_range = 'week' } = req.query
 
   const rangeToDays = { week: 7, month: 30, quarter: 90 }
@@ -217,7 +263,7 @@ router.post('/breaks', [
   body('activity_type').isString().withMessage('Activity type required'),
   body('duration').isInt({ min: 1 }).withMessage('Duration must be positive')
 ], asyncHandler(async (req, res) => {
-  const userId = req.user.id
+  const userId = req.user && req.user.id
   const { activity_type, duration, effectiveness_rating, notes } = req.body
 
   const result = await query(
@@ -237,7 +283,7 @@ router.post('/breaks', [
 
 // Get break recommendations
 router.get('/break-recommendations', asyncHandler(async (req, res) => {
-  const userId = req.user.id
+  const userId = req.user && req.user.id
   const { current_stress = 5, current_energy = 5, session_duration = 30 } = req.query
 
   // Get user's preferred break activities
@@ -482,127 +528,7 @@ function calculateCorrelation(x, y) {
   return denominator === 0 ? 0 : numerator / denominator
 }
 
-// Get wellness history (last N days)
-router.get('/history', asyncHandler(async (req, res) => {
-  const userId = req.user?.id || '000000000000000000000000' // Default user ID for development
-  const days = parseInt(req.query.days) || 30
-  
-  const startDate = new Date()
-  startDate.setDate(startDate.getDate() - days)
-  
-  const entries = await WellnessEntry.find({
-    user_id: new mongoose.Types.ObjectId(userId),
-    created_at: { $gte: startDate }
-  })
-  .sort({ created_at: -1 })
-  .limit(days)
-  
-  // Transform data for frontend charts
-  const chartData = entries.map((entry, index) => ({
-    day: `Day ${index + 1}`,
-    wellness_score: Math.round(
-      (entry.mood_score * 0.3 + (11 - entry.stress_level) * 0.3 + entry.energy_level * 0.4) * 10
-    ),
-    mood_score: entry.mood_score,
-    stress_level: entry.stress_level,
-    energy_level: entry.energy_level,
-    date: entry.created_at
-  }))
-  
-  res.json({
-    success: true,
-    data: chartData,
-    count: chartData.length,
-    period: `${days} days`
-  })
-}))
 
-// Get wellness insights
-router.get('/insights', asyncHandler(async (req, res) => {
-  const userId = req.user?.id || '000000000000000000000000' // Default user ID for development
-  
-  // Get recent wellness data for insights
-  const recentEntries = await WellnessEntry.find({
-    user_id: new mongoose.Types.ObjectId(userId)
-  })
-  .sort({ created_at: -1 })
-  .limit(20)
-  
-  if (recentEntries.length === 0) {
-    return res.json({
-      success: true,
-      data: [],
-      message: 'No wellness data available for insights'
-    })
-  }
-  
-  // Generate insights based on recent data
-  const insights = generateSimpleWellnessInsights(recentEntries)
-  
-  res.json({
-    success: true,
-    data: insights,
-    count: insights.length,
-    generated_at: new Date().toISOString()
-  })
-}))
-
-// Get mood analytics
-router.get('/mood-analytics', asyncHandler(async (req, res) => {
-  const userId = req.user?.id || '000000000000000000000000' // Default user ID for development
-  const timeRange = req.query.time_range || 'week'
-  
-  let startDate = new Date()
-  switch (timeRange) {
-    case 'week':
-      startDate.setDate(startDate.getDate() - 7)
-      break
-    case 'month':
-      startDate.setMonth(startDate.getMonth() - 1)
-      break
-    case 'year':
-      startDate.setFullYear(startDate.getFullYear() - 1)
-      break
-    default:
-      startDate.setDate(startDate.getDate() - 7)
-  }
-  
-  const entries = await WellnessEntry.find({
-    user_id: new mongoose.Types.ObjectId(userId),
-    created_at: { $gte: startDate }
-  })
-  .sort({ created_at: -1 })
-  
-  if (entries.length === 0) {
-    return res.json({
-      success: true,
-      summary: {
-        avgMood: 5,
-        avgStress: 5,
-        avgEnergy: 5,
-        totalEntries: 0,
-        period: timeRange
-      }
-    })
-  }
-  
-  // Calculate averages
-  const avgMood = Math.round(entries.reduce((sum, e) => sum + e.mood_score, 0) / entries.length)
-  const avgStress = Math.round(entries.reduce((sum, e) => sum + e.stress_level, 0) / entries.length)
-  const avgEnergy = Math.round(entries.reduce((sum, e) => sum + e.energy_level, 0) / entries.length)
-  
-  res.json({
-    success: true,
-    summary: {
-      avgMood,
-      avgStress,
-      avgEnergy,
-      totalEntries: entries.length,
-      period: timeRange,
-      lastUpdated: new Date().toISOString()
-    }
-  })
-}))
 
 // ML-based wellness calculation
 router.post('/calculate-ml', [
@@ -619,93 +545,121 @@ router.post('/calculate-ml', [
     })
   }
 
-  const userId = req.user?.id || '000000000000000000000000' // Default user ID for development
+  const userId = (req.user && req.user.id) || '000000000000000000000000' // Default user ID for development
   const { mood, stress, energy, sleep, activity, nutrition, hydration, screen_time, custom } = req.body
 
-  // Calculate wellness score using ML-like algorithm
-  let wellness_score = 0
-  let confidence = 0.8
-  let model_type = 'rule_based_ml'
-  
   try {
-    // Base score from mood, stress, and energy
-    const moodScore = (mood.score / 10) * 40 // 40% weight
-    const stressScore = ((11 - stress.level) / 10) * 30 // 30% weight (inverted)
-    const energyScore = (energy.level / 10) * 30 // 30% weight
-    
-    wellness_score = Math.round(moodScore + stressScore + energyScore)
-    
-    // Adjust based on additional factors
-    if (sleep && sleep.hours) {
-      if (sleep.hours >= 7 && sleep.hours <= 9) wellness_score += 5
-      else if (sleep.hours < 6 || sleep.hours > 10) wellness_score -= 5
+    // Prepare data for Python ML backend
+    const mlData = {
+      mood: { score: mood.score, tags: mood.tags || [], note: mood.note || '' },
+      stress: { level: stress.level, sources: [], note: '' },
+      energy: { level: energy.level, note: '' },
+      sleep: { hours: sleep?.hours || 7, quality: sleep?.quality || 'good', note: '' },
+      activity: { minutes: activity?.minutes || 30, type: activity?.type || 'walking', note: '' },
+      nutrition: { score: nutrition?.score || 7, note: '' },
+      hydration: { glasses: hydration?.glasses || 6, note: '' },
+      screen_time: { hours: screen_time?.hours || 4, note: '' },
+      custom: custom || '',
+      timestamp: new Date().toISOString()
     }
-    
-    if (activity && activity.minutes) {
-      if (activity.minutes >= 30) wellness_score += 3
-      else if (activity.minutes < 15) wellness_score -= 3
-    }
-    
-    if (nutrition && nutrition.score) {
-      if (nutrition.score >= 7) wellness_score += 2
-      else if (nutrition.score < 4) wellness_score -= 2
-    }
-    
-    if (hydration && hydration.glasses) {
-      if (hydration.glasses >= 6) wellness_score += 2
-      else if (hydration.glasses < 4) wellness_score -= 2
-    }
-    
-    if (screen_time && screen_time.hours) {
-      if (screen_time.hours > 8) wellness_score -= 3
-      else if (screen_time.hours < 2) wellness_score += 1
-    }
-    
-    // Ensure score is within bounds
-    wellness_score = Math.max(0, Math.min(100, wellness_score))
-    
-    // Generate recommendations
-    const recommendations = []
-    if (wellness_score < 50) {
-      recommendations.push('Consider improving sleep quality and reducing stress')
-      recommendations.push('Increase physical activity and maintain good nutrition')
-    } else if (wellness_score < 70) {
-      recommendations.push('Good progress! Focus on consistent sleep patterns')
-      recommendations.push('Maintain current activity levels and nutrition')
+
+    console.log('🚀 Calling Python ML backend with data:', JSON.stringify(mlData, null, 2))
+
+    // Call Python ML backend for REAL ML prediction
+    const pythonResponse = await fetch('http://localhost:8000/api/wellness/predict', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${userId}` // Pass user ID as token for now
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        data: mlData
+      })
+    })
+
+    if (pythonResponse.ok) {
+      const mlResult = await pythonResponse.json()
+      console.log('✅ Python ML backend response:', JSON.stringify(mlResult, null, 2))
+      
+      // Save the entry to database
+      const entry = await WellnessEntry.create({
+        user_id: new mongoose.Types.ObjectId(userId),
+        mood_score: mood.score,
+        stress_level: stress.level,
+        energy_level: energy.level,
+        sleep_hours: sleep?.hours,
+        sleep_quality: sleep?.quality,
+        notes: mood.note || '',
+        mood_tags: mood.tags || [],
+        created_at: new Date()
+      })
+
+      // Return REAL ML results
+      res.json({
+        success: true,
+        wellness_score: mlResult.wellness_score,
+        confidence: mlResult.confidence,
+        model_type: mlResult.model_type,
+        feature_importance: mlResult.feature_importance || {},
+        user_context: mlResult.user_context || {},
+        recommendations: mlResult.recommendations || [],
+        trends: mlResult.trends || {},
+        entry_id: entry.id,
+        message: 'Wellness calculated using REAL ML model',
+        ml_timestamp: mlResult.timestamp,
+        model_details: {
+          backend: 'Python ML Service',
+          prediction_method: mlResult.model_type,
+          confidence_score: mlResult.confidence,
+          features_used: Object.keys(mlData).length,
+          ml_backend_url: 'http://localhost:8000/api/wellness/predict'
+        }
+      })
+
     } else {
-      recommendations.push('Excellent wellness! Keep up your healthy habits')
-      recommendations.push('Consider sharing your wellness strategies with others')
+      // Fallback to rule-based if Python backend fails
+      console.warn('❌ Python ML backend failed, using fallback calculation')
+      console.warn('Response status:', pythonResponse.status)
+      console.warn('Response text:', await pythonResponse.text())
+      
+      const fallbackScore = Math.round(
+        (mood.score * 0.3 + (11 - stress.level) * 0.3 + energy.level * 0.4) * 10
+      )
+      
+      const entry = await WellnessEntry.create({
+        user_id: new mongoose.Types.ObjectId(userId),
+        mood_score: mood.score,
+        stress_level: stress.level,
+        energy_level: energy.level,
+        sleep_hours: sleep?.hours,
+        sleep_quality: sleep?.quality,
+        notes: mood.note || '',
+        mood_tags: mood.tags || [],
+        created_at: new Date()
+      })
+
+      res.json({
+        success: true,
+        wellness_score: fallbackScore,
+        confidence: 0.3, // Low confidence for fallback
+        model_type: 'rule_based_fallback',
+        entry_id: entry.id,
+        message: 'Wellness calculated using fallback method (ML backend unavailable)',
+        warning: 'Python ML service is not running. Using basic calculation instead.',
+        ml_backend_status: 'unavailable',
+        fallback_reason: 'Python ML service connection failed'
+      })
     }
-    
-    // Save the entry to database
-    const entry = await WellnessEntry.create({
-      user_id: new mongoose.Types.ObjectId(userId),
-      mood_score: mood.score,
-      stress_level: stress.level,
-      energy_level: energy.level,
-      sleep_hours: sleep?.hours,
-      sleep_quality: sleep?.quality,
-      notes: mood.note || '',
-      mood_tags: mood.tags || [],
-      created_at: new Date()
-    })
-    
-    res.json({
-      success: true,
-      wellness_score,
-      confidence,
-      model_type,
-      recommendations,
-      entry_id: entry.id,
-      message: 'Wellness calculated and recorded successfully'
-    })
     
   } catch (error) {
-    console.error('ML wellness calculation error:', error)
+    console.error('❌ ML wellness calculation error:', error)
     res.status(500).json({
       success: false,
       message: 'Failed to calculate wellness score',
-      error: error.message
+      error: error.message,
+      ml_backend_status: 'error',
+      error_type: error.name
     })
   }
 }))

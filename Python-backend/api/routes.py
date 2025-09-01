@@ -432,6 +432,42 @@ async def test_track_wellness_metrics(metrics: dict):
         logger.error(f"Test wellness metrics tracking failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# Wellness prediction endpoint (no auth required for development)
+@wellness_router.post("/predict")
+async def predict_wellness(
+    request_data: Dict
+):
+    """Predict wellness score using ML model"""
+    try:
+        user_id = request_data.get("user_id", "default_user")
+        data = request_data.get("data", {})
+        
+        logger.info(f"🔮 Wellness prediction request for user {user_id}")
+        logger.info(f"📊 Input data: {data}")
+        
+        # Use the wellness ML model directly for prediction
+        prediction_result = wellness_ml_model.predict_wellness(user_id, data)
+        
+        logger.info(f"✅ Prediction result: {prediction_result}")
+        
+        return {
+            "success": True,
+            "wellness_score": prediction_result.get("wellness_score", 50),
+            "confidence": prediction_result.get("confidence", 0.8),
+            "model_type": prediction_result.get("model_type", "gradient_boosting"),
+            "feature_importance": prediction_result.get("feature_importance", {}),
+            "user_context": prediction_result.get("user_context", {}),
+            "recommendations": prediction_result.get("recommendations", []),
+            "trends": prediction_result.get("trends", {}),
+            "timestamp": datetime.now().isoformat(),
+            "user_id": user_id,
+            "input_features": list(data.keys())
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Wellness prediction failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+
 # Export user wellness data
 @wellness_router.get("/export-data/{user_id}")
 async def export_user_wellness_data(
