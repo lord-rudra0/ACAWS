@@ -595,11 +595,12 @@ router.post('/calculate-ml', [
         created_at: new Date()
       })
 
-      // Return REAL ML results
+      // Return REAL ML results (include detailed confidence explanation when available)
       res.json({
         success: true,
         wellness_score: mlResult.wellness_score,
         confidence: mlResult.confidence,
+        confidence_explanation: mlResult.confidence_explanation || {},
         model_type: mlResult.model_type,
         feature_importance: mlResult.feature_importance || {},
         user_context: mlResult.user_context || {},
@@ -612,6 +613,7 @@ router.post('/calculate-ml', [
           backend: 'Python ML Service',
           prediction_method: mlResult.model_type,
           confidence_score: mlResult.confidence,
+          confidence_explanation: mlResult.confidence_explanation || {},
           features_used: Object.keys(mlData).length,
           ml_backend_url: 'http://localhost:8000/api/wellness/predict'
         }

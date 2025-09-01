@@ -189,42 +189,71 @@ class AdvancedMLService {
     }
   }
 
-  // Mock performance prediction
+  // Performance prediction - call backend
   async predictPerformance(userData, context) {
-    // Mock performance prediction
-    const baseScore = 70
-    const variation = (Math.random() - 0.5) * 20
-    
-    return {
-      predictedScore: Math.max(0, Math.min(100, baseScore + variation)),
-      confidence: 0.6 + Math.random() * 0.4,
-      factors: ['mood', 'energy', 'focus'],
-      timestamp: new Date().toISOString(),
-      source: 'mock_prediction'
+    try {
+      const url = pyEndpoint('/predict/performance')
+      dbg('predictPerformance ->', { url, userData, context })
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+        body: JSON.stringify({ user: userData, context })
+      })
+      if (!res.ok) throw new Error(`Backend responded ${res.status}`)
+      const json = await res.json()
+      return json
+    } catch (error) {
+      console.error('predictPerformance failed, falling back to mock:', error)
+      // Fallback to mock
+      const baseScore = 70
+      const variation = (Math.random() - 0.5) * 20
+      return {
+        predictedScore: Math.max(0, Math.min(100, baseScore + variation)),
+        confidence: 0.6 + Math.random() * 0.4,
+        factors: ['mood', 'energy', 'focus'],
+        timestamp: new Date().toISOString(),
+        source: 'mock_prediction'
+      }
     }
   }
 
-  // Mock wellness analysis
+  // Wellness analysis - call backend Python service
   async analyzeWellnessAdvanced(wellnessData) {
-    // Mock wellness analysis - real implementation would use Python backend
-    const wellnessScore = 60 + Math.random() * 40
-    const recommendations = [
-      'Take regular breaks',
-      'Stay hydrated',
-      'Practice mindfulness',
-      'Get adequate sleep'
-    ]
-    
-    return {
-      wellnessScore: Math.round(wellnessScore),
-      recommendations: recommendations.slice(0, 2 + Math.floor(Math.random() * 2)),
-      trends: {
-        mood: 'stable',
-        energy: 'improving',
-        stress: 'decreasing'
-      },
-      timestamp: new Date().toISOString(),
-      source: 'mock_analysis'
+    try {
+      const url = pyEndpoint('/wellness/predict')
+      dbg('analyzeWellnessAdvanced ->', { url, wellnessData })
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+        body: JSON.stringify(wellnessData)
+      })
+      if (!res.ok) throw new Error(`Backend responded ${res.status}`)
+      const json = await res.json()
+      // Normalize response shape if backend uses different property names
+      return {
+        wellnessScore: json.wellness_score ?? json.wellnessScore ?? json.score ?? null,
+        recommendations: json.recommendations || [],
+        trends: json.trends || {},
+        timestamp: json.timestamp || new Date().toISOString(),
+        source: json.model_type ? 'real_backend' : 'python_backend',
+        raw: json
+      }
+    } catch (error) {
+      console.error('analyzeWellnessAdvanced failed, falling back to mock:', error)
+      const wellnessScore = 60 + Math.random() * 40
+      const recommendations = [
+        'Take regular breaks',
+        'Stay hydrated',
+        'Practice mindfulness',
+        'Get adequate sleep'
+      ]
+      return {
+        wellnessScore: Math.round(wellnessScore),
+        recommendations: recommendations.slice(0, 2 + Math.floor(Math.random() * 2)),
+        trends: { mood: 'stable', energy: 'improving', stress: 'decreasing' },
+        timestamp: new Date().toISOString(),
+        source: 'mock_analysis'
+      }
     }
   }
 

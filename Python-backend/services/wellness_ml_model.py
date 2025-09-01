@@ -312,8 +312,13 @@ class WellnessMLModel:
                 # Use ML model
                 prediction = self._ml_predict(prediction_features)
             else:
-                # Use rule-based approach
-                prediction = self._rule_based_predict(features)
+                # Use rule-based approach (use features vector to compute confidence)
+                try:
+                    prediction = self._rule_based_predict(prediction_features.flatten())
+                except Exception as e:
+                    logger.warning(f"Rule-based fallback failed, using constant score: {e}")
+                    # Final fallback
+                    prediction = self._rule_based_predict(np.array([]))
             
             # Convert numpy types to Python native types for JSON serialization
             def convert_numpy_types(obj):
@@ -333,8 +338,9 @@ class WellnessMLModel:
             # Add context and explanations
             result = {
                 'wellness_score': convert_numpy_types(prediction['score']),
-                'confidence': convert_numpy_types(prediction['confidence']),
-                'model_type': prediction['model_type'],
+                'confidence': convert_numpy_types(prediction.get('confidence', 0.0)),
+                'confidence_explanation': convert_numpy_types(prediction.get('confidence_explanation', {})),
+                'model_type': prediction.get('model_type', 'rule_based'),
                 'feature_importance': convert_numpy_types(prediction.get('feature_importance', {})),
                 'user_context': convert_numpy_types(user_context),
                 'recommendations': self._generate_recommendations(features, prediction['score']),
@@ -408,46 +414,137 @@ class WellnessMLModel:
         return np.array(feature_vector).reshape(1, -1)
     
     def _ml_predict(self, features: np.ndarray) -> Dict:
-        """Make prediction using trained ML model"""
+        """Make prediction using trained ML model with calibrated uncertainty and explanation."""
         try:
             # Scale features
             scaled_features = self.scaler.transform(features)
-            
-            # Make prediction
-            prediction = self.wellness_predictor.predict(scaled_features)[0]
-            
-            # Calculate confidence (simplified)
-            confidence = 0.8  # In production, use model uncertainty estimation
-            
-            # Get feature importance if available
-            feature_importance = {}
-            if hasattr(self.wellness_predictor, 'feature_importances_'):
-                importance_scores = self.wellness_predictor.feature_importances_
-                for i, score in enumerate(importance_scores):
-                    if i < len(self.feature_names):
-                        feature_importance[self.feature_names[i]] = float(score)
-            
+
+            # Primary prediction (point estimate)
+            point_pred = float(self.wellness_predictor.predict(scaled_features)[0])
+
+            # Try ensemble-based uncertainty if available
+            if hasattr(self.wellness_predictor, 'estimators_') and len(self.wellness_predictor.estimators_) > 1:
+                try:
+                    preds = np.array([est.predict(scaled_features)[0] for est in self.wellness_predictor.estimators_])
+                    mean_pred = float(np.mean(preds))
+                    std_pred = float(np.std(preds))
+
+                    # Calibrate std to normalized [0,1]. The calibration_scale should be tuned; 20-30 is a reasonable start
+                    calibration_scale = 30.0
+                    normalized_std = max(0.0, min(1.0, std_pred / calibration_scale))
+                    confidence = float(max(0.01, min(0.99, 1.0 - normalized_std)))
+
+                    confidence_explanation = {
+                        'method': 'ensemble_variance',
+                        'raw_std': std_pred,
+                        'calibration_scale': calibration_scale,
+                        'normalized_std': normalized_std
+                    }
+
+                    # Feature importance
+                    feature_importance = {}
+                    if hasattr(self.wellness_predictor, 'feature_importances_'):
+                        importance_scores = self.wellness_predictor.feature_importances_
+                        for i, score in enumerate(importance_scores):
+                            if i < len(self.feature_names):
+                                feature_importance[self.feature_names[i]] = float(score)
+
+                    return {
+                        'score': float(mean_pred),
+                        'confidence': confidence,
+                        'confidence_explanation': confidence_explanation,
+                        'model_type': 'ml_ensemble',
+                        'feature_importance': feature_importance
+                    }
+                except Exception as e:
+                    logger.warning(f"Ensemble variance estimate failed: {e}")
+
+            # Fallback: if predict_proba exists use it (classification-derived confidence)
+            if hasattr(self.wellness_predictor, 'predict_proba'):
+                try:
+                    probs = self.wellness_predictor.predict_proba(scaled_features)
+                    top_prob = float(np.max(probs[0]))
+                    confidence_explanation = {'method': 'predict_proba', 'top_prob': top_prob}
+                    feature_importance = {}
+                    if hasattr(self.wellness_predictor, 'feature_importances_'):
+                        importance_scores = self.wellness_predictor.feature_importances_
+                        for i, score in enumerate(importance_scores):
+                            if i < len(self.feature_names):
+                                feature_importance[self.feature_names[i]] = float(score)
+
+                    return {
+                        'score': point_pred,
+                        'confidence': float(max(0.01, min(0.99, top_prob))),
+                        'confidence_explanation': confidence_explanation,
+                        'model_type': 'ml_probabilistic',
+                        'feature_importance': feature_importance
+                    }
+                except Exception:
+                    pass
+
+            # Final fallback: point estimate without variance info
             return {
-                'score': float(prediction),
-                'confidence': confidence,
-                'model_type': 'ml_ensemble',
-                'feature_importance': feature_importance
+                'score': point_pred,
+                'confidence': 0.5,
+                'confidence_explanation': {'method': 'point_estimate', 'note': 'no-variance-info'},
+                'model_type': 'ml_point',
+                'feature_importance': {}
             }
-            
+
         except Exception as e:
             logger.error(f"ML prediction failed: {e}")
             return self._rule_based_predict(features.flatten())
     
     def _rule_based_predict(self, features: np.ndarray) -> Dict:
-        """Fallback to rule-based prediction"""
-        # Simple rule-based calculation
-        score = 50.0  # Default score
-        
-        return {
-            'score': score,
-            'confidence': 0.5,
-            'model_type': 'rule_based'
-        }
+        """Fallback to rule-based prediction with confidence explanation"""
+        try:
+            if features is None or (isinstance(features, np.ndarray) and features.size == 0):
+                return {
+                    'score': 50.0,
+                    'confidence': 0.25,
+                    'confidence_explanation': {'method': 'no_input', 'reason': 'no features provided'},
+                    'model_type': 'rule_based',
+                    'feature_importance': {}
+                }
+
+            f = np.array(features, dtype=float)
+            non_nan = int(np.count_nonzero(~np.isnan(f)))
+            total = int(f.size)
+            completeness = float(non_nan) / float(total) if total > 0 else 0.0
+
+            # Base score derived from mean; map small-range means to 0-100
+            mean_val = float(np.nanmean(f))
+            if mean_val <= 10:
+                score = mean_val * 10.0
+            else:
+                score = mean_val
+
+            # Confidence increases with completeness
+            confidence = max(0.05, min(0.95, 0.3 + 0.7 * completeness))
+
+            confidence_explanation = {
+                'method': 'feature_completeness',
+                'completeness': completeness,
+                'non_nan_features': non_nan,
+                'total_features': total
+            }
+
+            return {
+                'score': float(score),
+                'confidence': float(confidence),
+                'confidence_explanation': confidence_explanation,
+                'model_type': 'rule_based',
+                'feature_importance': {}
+            }
+        except Exception as e:
+            logger.warning(f"Rule-based predict failed: {e}")
+            return {
+                'score': 50.0,
+                'confidence': 0.3,
+                'confidence_explanation': {'method': 'error_fallback', 'error': str(e)},
+                'model_type': 'rule_based',
+                'feature_importance': {}
+            }
     
     def _generate_recommendations(self, features: Dict, wellness_score: float) -> List[str]:
         """Generate personalized wellness recommendations"""

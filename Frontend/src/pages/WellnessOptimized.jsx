@@ -162,35 +162,50 @@ const WellnessOptimized = () => {
     setInputError(null)
     
     try {
-      const data = {
-        mood: { score: inputForm.mood.score || 5, tags: inputForm.mood.tags.split(',').filter(t => t.trim()), note: inputForm.mood.note },
-        stress: { level: inputForm.mood.stress || 5, sources: [], note: '' },
-        energy: { level: inputForm.mood.energy || 5, note: '' },
-        sleep: { hours: inputForm.mood.sleep.hours || 7, quality: inputForm.mood.sleep.quality || 'good', note: '' },
-        activity: { minutes: inputForm.mood.activity.minutes || 30, type: inputForm.mood.activity.type || 'walking', note: '' },
-        nutrition: { score: inputForm.mood.nutrition || 7, note: '' },
-        hydration: { glasses: inputForm.mood.hydration || 6, note: '' },
-        screen_time: { hours: inputForm.mood.screen_time || 4, note: '' }
+      // Normalize and coerce inputs to numeric types where appropriate
+      const moodScore = Number(inputForm.mood.score) || 5
+      const moodTags = typeof inputForm.mood.tags === 'string' ? inputForm.mood.tags.split(',').map(t => t.trim()).filter(Boolean) : (inputForm.mood.tags || [])
+      const stressLevelVal = Number(inputForm.stress.level) || 5
+      const energyVal = Number(inputForm.energy.level) || 5
+      const sleepHours = Number(inputForm.sleep.hours) || 7
+      const sleepQuality = inputForm.sleep.quality || 'good'
+      const activityMinutes = Number(inputForm.activity.minutes) || 30
+      const activityType = inputForm.activity.type || 'walking'
+      const nutritionScore = Number(inputForm.nutrition.score) || 7
+      const hydrationGlasses = Number(inputForm.hydration.glasses) || 6
+      const screenHours = Number(inputForm.screen_time.hours) || 4
+
+      let customData = ''
+      if (inputForm.custom) {
+        try {
+          customData = JSON.parse(inputForm.custom)
+        } catch (e) {
+          // keep as string if not valid JSON
+          customData = inputForm.custom
+        }
       }
 
-      if (inputForm.custom) {
-        data.custom = inputForm.custom
+      const data = {
+        mood: { score: moodScore, tags: moodTags, note: inputForm.mood.note || '' },
+        stress: { level: stressLevelVal, sources: [], note: '' },
+        energy: { level: energyVal, note: '' },
+        sleep: { hours: sleepHours, quality: sleepQuality, note: '' },
+        activity: { minutes: activityMinutes, type: activityType, note: '' },
+        nutrition: { score: nutritionScore, note: '' },
+        hydration: { glasses: hydrationGlasses, note: '' },
+        screen_time: { hours: screenHours, note: '' },
+        custom: customData,
+        timestamp: new Date().toISOString()
       }
+
+      // Debug: log the exact payload sent to backend
+      console.log('ML payload ->', data)
 
       const result = await wellnessAPI.calculateML(data)
       setInputResult(result)
       setMlWellnessScore(Math.round(result.wellness_score))
-      setInputForm({
-        mood: { score: '', tags: '', note: '' },
-        stress: { level: '' },
-        energy: { level: '' },
-        sleep: { hours: '', quality: '' },
-        activity: { minutes: '', type: '' },
-        nutrition: { score: '' },
-        hydration: { glasses: '' },
-        screen_time: { hours: '' },
-        custom: ''
-      })
+      // Keep form values after submit to make debugging easier. Uncomment to clear after success.
+      // setInputForm({ mood: { score: '', tags: '', note: '' }, stress: { level: '' }, energy: { level: '' }, sleep: { hours: '', quality: '' }, activity: { minutes: '', type: '' }, nutrition: { score: '' }, hydration: { glasses: '' }, screen_time: { hours: '' }, custom: '' })
     } catch (err) {
       setInputError(err?.message || 'Failed to calculate wellness')
     } finally {
