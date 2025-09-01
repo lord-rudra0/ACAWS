@@ -21,6 +21,7 @@ const DailyWellnessSummarySchema = new mongoose.Schema(
     goals_total: { type: Number },
     avg_focus: { type: Number },
     tips_sample: { type: [String], default: [] },
+  last_seven_scores: { type: [Number], default: [] },
     meta: { type: Object },
     created_at: { type: Date, default: Date.now },
     updated_at: { type: Date, default: Date.now }

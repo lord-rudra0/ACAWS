@@ -226,6 +226,33 @@ router.get('/insights', asyncHandler(async (req, res) => {
   })
 }))
 
+// Get today's daily summary (including last 7 scores)
+router.get('/daily-summary', asyncHandler(async (req, res) => {
+  const userId = (req.user && req.user.id) || '000000000000000000000000'
+  const today = new Date().toISOString().slice(0, 10)
+
+  const doc = await DailyWellnessSummary.findOne({ user_id: new mongoose.Types.ObjectId(userId), date: today })
+
+  if (!doc) {
+    return res.json({ success: true, summary: { date: today, wellness_score: null, last_seven_scores: [], sessions: 0, goals: [], goals_achieved: 0, goals_total: 0, avg_focus: 0 } })
+  }
+
+  // Ensure default values
+  const summary = {
+    date: doc.date,
+    wellness_score: doc.wellness_score || null,
+    last_seven_scores: Array.isArray(doc.last_seven_scores) ? doc.last_seven_scores.slice(0, 7) : [],
+    sessions: doc.sessions || 0,
+    goals: Array.isArray(doc.goals) ? doc.goals : [],
+    goals_achieved: doc.goals_achieved || 0,
+    goals_total: doc.goals_total || 0,
+    avg_focus: doc.avg_focus || 0,
+    tips_sample: Array.isArray(doc.tips_sample) ? doc.tips_sample : []
+  }
+
+  res.json({ success: true, summary })
+}))
+
 // Mood analytics aggregated by day over a time range
 router.get('/mood-analytics', asyncHandler(async (req, res) => {
   const userId = (req.user && req.user.id) || '000000000000000000000000' // Default user ID for development
@@ -595,6 +622,26 @@ router.post('/calculate-ml', [
         created_at: new Date()
       })
 
+      // Update daily summary: append wellness_score to last_seven_scores and keep last 7
+      try {
+        const today = new Date().toISOString().slice(0, 10)
+        const score = mlResult.wellness_score || null
+        if (score !== null) {
+          const doc = await DailyWellnessSummary.findOneAndUpdate(
+            { user_id: new mongoose.Types.ObjectId(userId), date: today },
+            { $push: { last_seven_scores: { $each: [score], $position: 0 } }, $set: { wellness_score: score } },
+            { new: true, upsert: true }
+          )
+          // trim to last 7 if too many
+          if (doc && Array.isArray(doc.last_seven_scores) && doc.last_seven_scores.length > 7) {
+            doc.last_seven_scores = doc.last_seven_scores.slice(0, 7)
+            await doc.save()
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to update DailyWellnessSummary last_seven_scores:', e.message)
+      }
+
       // Return REAL ML results (include detailed confidence explanation when available)
       res.json({
         success: true,
@@ -640,6 +687,23 @@ router.post('/calculate-ml', [
         mood_tags: mood.tags || [],
         created_at: new Date()
       })
+
+      // Update daily summary for fallback score
+      try {
+        const today = new Date().toISOString().slice(0, 10)
+        const score = fallbackScore
+        const doc = await DailyWellnessSummary.findOneAndUpdate(
+          { user_id: new mongoose.Types.ObjectId(userId), date: today },
+          { $push: { last_seven_scores: { $each: [score], $position: 0 } }, $set: { wellness_score: score } },
+          { new: true, upsert: true }
+        )
+        if (doc && Array.isArray(doc.last_seven_scores) && doc.last_seven_scores.length > 7) {
+          doc.last_seven_scores = doc.last_seven_scores.slice(0, 7)
+          await doc.save()
+        }
+      } catch (e) {
+        console.warn('Failed to update DailyWellnessSummary last_seven_scores (fallback):', e.message)
+      }
 
       res.json({
         success: true,

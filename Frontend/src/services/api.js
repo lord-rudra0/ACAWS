@@ -324,6 +324,16 @@ export const wellnessAPI = {
     }
   },
 
+  // Fetch persisted daily summary (latest wellness score, last 7 scores, goals, sessions, avg_focus)
+  getDailySummary: async () => {
+    try {
+      const response = await expressAPI.get('/api/wellness/daily-summary')
+      return response.data
+    } catch (error) {
+      throw new Error(error.message || 'Failed to load daily wellness summary')
+    }
+  },
+
   // ML-based wellness calculation
   calculateML: async (entryData = {}) => {
     try {

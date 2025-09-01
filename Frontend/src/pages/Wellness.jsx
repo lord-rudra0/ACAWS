@@ -87,6 +87,13 @@ const Wellness = () => {
     }
   }
 
+  // Helper to create a date label for recent scores (returns MM-DD)
+  const formatDateLabel = (daysAgo = 0) => {
+    const d = new Date()
+    d.setDate(d.getDate() - daysAgo)
+    return d.toISOString().slice(5, 10)
+  }
+
   // Memoized values for performance
   const moods = useMemo(() => [
     { icon: Smile, label: 'Great', value: 5, color: 'text-green-500' },
@@ -146,8 +153,8 @@ const Wellness = () => {
     if (!Array.isArray(wellnessData) || wellnessData.length === 0) {
       return []
     }
-    return wellnessData.slice(-7).map((entry, index) => ({
-      day: `Day ${index + 1}`,
+    return wellnessData.slice(-7).map((entry, index, arr) => ({
+      day: entry.day || `Day ${index + 1}`,
       score: entry.wellness_score || 0,
       mood: entry.mood_score || 0,
       stress: entry.stress_level || 0
@@ -312,6 +319,28 @@ const Wellness = () => {
         screen_time: { hours: 4 },
         custom: ''
       })
+      // Refresh persisted daily summary so UI reflects the saved latest score and counters
+      try {
+        const ds2 = await wellnessAPI.getDailySummary().catch(() => null)
+        const summaryObj2 = ds2?.summary ?? ds2
+        if (summaryObj2) {
+          setSummary({
+            sessions: summaryObj2.sessions ?? summaryObj2.sessions_count ?? null,
+            goalsAchieved: summaryObj2.goals_achieved ?? summaryObj2.goalsAchieved ?? (summaryObj2.goals?.achieved) ?? null,
+            goalsTotal: summaryObj2.goals_total ?? summaryObj2.goalsTotal ?? (summaryObj2.goals?.total) ?? null,
+            avgFocus: summaryObj2.avg_focus ?? summaryObj2.avgFocus ?? null
+          })
+
+          const lastScores2 = Array.isArray(summaryObj2.last_seven_scores) ? summaryObj2.last_seven_scores : []
+          if (lastScores2.length > 0) {
+            setWellnessScore(lastScores2[0])
+            const chron2 = [...lastScores2].reverse()
+            setWellnessData(chron2.map((s, i) => ({ wellness_score: s, created_at: null, day: formatDateLabel(lastScores2.length - 1 - i) })))
+          }
+        }
+      } catch (e) {
+        console.debug('getDailySummary after calculateML failed (ignored)', e)
+      }
       // --- END NEW ---
 
     } catch (err) {
@@ -424,6 +453,30 @@ const Wellness = () => {
           console.debug('generateHiddenTips on mount failed (ignored)', e)
         }
         setSummary(moodData?.summary || {})
+        // Load persisted daily summary (latest wellness score, last 7 scores, goals, sessions, avg_focus)
+        try {
+          const ds = await wellnessAPI.getDailySummary().catch(() => null)
+          const summaryObj = ds?.summary ?? ds
+          if (summaryObj) {
+            setSummary({
+              sessions: summaryObj.sessions ?? summaryObj.sessions_count ?? null,
+              goalsAchieved: summaryObj.goals_achieved ?? summaryObj.goalsAchieved ?? (summaryObj.goals?.achieved) ?? null,
+              goalsTotal: summaryObj.goals_total ?? summaryObj.goalsTotal ?? (summaryObj.goals?.total) ?? null,
+              avgFocus: summaryObj.avg_focus ?? summaryObj.avgFocus ?? null
+            })
+
+            // Persisted last-seven scores -> update displayed wellness score and chart
+            const lastScores = Array.isArray(summaryObj.last_seven_scores) ? summaryObj.last_seven_scores : []
+            if (lastScores.length > 0) {
+              // API stores newest first; first element = latest. For display/chart we want oldest->newest
+              setWellnessScore(lastScores[0])
+              const chron = [...lastScores].reverse() // oldest -> newest
+              setWellnessData(chron.map((s, i) => ({ wellness_score: s, created_at: null, day: formatDateLabel(lastScores.length - 1 - i) })))
+            }
+          }
+        } catch (e) {
+          console.debug('getDailySummary on mount failed (ignored)', e)
+        }
       } catch (error) {
         console.error('Failed to fetch wellness data:', error)
         // Set empty arrays on error to prevent crashes
@@ -503,6 +556,19 @@ const Wellness = () => {
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
+                  {/* Show last 7 scores as a compact history */}
+                  <div className="mt-3 flex items-center justify-between space-x-2">
+                    {chartData.length === 0 ? (
+                      <div className="text-sm text-gray-500">No historical scores</div>
+                    ) : (
+                      chartData.map((d, i) => (
+                        <div key={i} className="flex-1 text-center p-2 bg-gray-50 dark:bg-gray-700 rounded-lg text-sm">
+                          <div className="text-xs text-gray-500">{d.day}</div>
+                          <div className="font-medium text-gray-900 dark:text-white">{Math.round(d.score)}</div>
+                        </div>
+                      ))
+                    )}
+                  </div>
               </div>
             </div>
 
