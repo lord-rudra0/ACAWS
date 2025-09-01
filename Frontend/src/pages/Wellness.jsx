@@ -39,9 +39,16 @@ const Wellness = () => {
   const [breakStartTime, setBreakStartTime] = useState(null)
 
   // AI/Analytics derived state
+  // Small client-side fallback tips shown when backend/assistant returns none
+  const FALLBACK_TIPS = [
+    'Take 3 deep breaths right now — slow inhale, hold, slow exhale.',
+    'Stand up and stretch for 2 minutes to relieve tension.',
+    'Drink a glass of water and take a short walk to reset focus.'
+  ]
+
   const [tipsLoading, setTipsLoading] = useState(false)
   const [tipsError, setTipsError] = useState(null)
-  const [aiTips, setAiTips] = useState([])
+  const [aiTips, setAiTips] = useState(FALLBACK_TIPS)
   const [dailyGoals, setDailyGoals] = useState([])
   const [goalsLoading, setGoalsLoading] = useState(false)
   const [summary, setSummary] = useState({ sessions: null, goalsAchieved: null, goalsTotal: null, avgFocus: null })
@@ -71,13 +78,6 @@ const Wellness = () => {
   const [inputResult, setInputResult] = useState(null)
   const [inputLoading, setInputLoading] = useState(false)
   const [inputError, setInputError] = useState(null)
-
-  // Small client-side fallback tips shown when backend/assistant returns none
-  const FALLBACK_TIPS = [
-    'Take 3 deep breaths right now — slow inhale, hold, slow exhale.',
-    'Stand up and stretch for 2 minutes to relieve tension.',
-    'Drink a glass of water and take a short walk to reset focus.'
-  ]
 
   // Helper to ensure a visible loader for at least `minMs` milliseconds
   const ensureMinDelay = async (startTime, minMs = 500) => {
@@ -397,6 +397,32 @@ const Wellness = () => {
 
         console.debug('fetchWellness: normalizedTips=', normalizedTips)
         setAiTips(normalizedTips.length > 0 ? normalizedTips : FALLBACK_TIPS)
+        // Proactively request server-side (hidden) tips to populate AI tips immediately.
+        // We keep the current normalized tips (or fallback) while awaiting assistant response,
+        // then replace them if assistant returns non-empty tips.
+        try {
+          const lastEntry = Array.isArray(history?.history) && history.history.length > 0
+            ? history.history[0]
+            : (Array.isArray(wellnessData) && wellnessData.length > 0 ? wellnessData[wellnessData.length - 1] : null)
+
+          const payload = {
+            input: { last_entry: lastEntry, history: Array.isArray(history?.history) ? history.history : [] },
+            wellness_score: lastEntry?.wellness_score || (normalizedTips[0]?.wellness_score) || null
+          }
+
+          const assistantStart = Date.now()
+          const tipsResp = await wellnessAPI.generateHiddenTips(payload)
+          const returned = tipsResp || {}
+          const returnedTips = Array.isArray(returned.tips)
+            ? returned.tips
+            : Array.isArray(returned.data) ? returned.data : Array.isArray(returned) ? returned : []
+
+          if (returnedTips.length > 0) {
+            setAiTips(returnedTips)
+          }
+        } catch (e) {
+          console.debug('generateHiddenTips on mount failed (ignored)', e)
+        }
         setSummary(moodData?.summary || {})
       } catch (error) {
         console.error('Failed to fetch wellness data:', error)
