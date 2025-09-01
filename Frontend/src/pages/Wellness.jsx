@@ -497,6 +497,19 @@ const Wellness = () => {
     return mlWellnessScore || calculatedWellnessScore || wellnessScore || '—'
   }, [mlWellnessScore, calculatedWellnessScore, wellnessScore])
 
+  // Format numeric score to up-to-4-decimal places, trimming trailing zeros
+  const formatScore = (val) => {
+    if (val === null || val === undefined || val === '—') return '—'
+    const n = Number(val)
+    if (Number.isNaN(n)) return '—'
+    // Use fixed 4 decimals then trim unnecessary trailing zeros
+    const s = n.toFixed(4)
+    // Remove trailing zeros after decimal, then remove trailing dot if any
+    return s.replace(/(\.\d*?[1-9])0+$/g, '$1').replace(/\.0+$/g, '')
+  }
+
+  const formattedDisplayScore = useMemo(() => formatScore(displayWellnessScore), [displayWellnessScore])
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 py-8">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -530,7 +543,7 @@ const Wellness = () => {
                 </h3>
                 <div className="text-center">
                   <div className="text-5xl font-bold text-primary-600 dark:text-primary-400 mb-2">
-                    {displayWellnessScore}
+                    {formattedDisplayScore}
                   </div>
                   <p className="text-gray-600 dark:text-gray-400 text-sm">
                     {displayWellnessScore === '—' ? 'No data yet' : 'Current wellness level'}

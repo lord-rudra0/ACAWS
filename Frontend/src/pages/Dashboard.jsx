@@ -26,6 +26,7 @@ import {
 } from 'recharts'
 import { useAuth } from '../contexts/AuthContext'
 import axios from 'axios'
+import { wellnessAPI } from '../services/api'
 
 const Dashboard = () => {
   const { user } = useAuth()
@@ -97,8 +98,20 @@ const Dashboard = () => {
         const resp = await axios.get(`${API_URL}/api/analytics/dashboard-summary`)
         const summary = resp.data?.summary || {}
 
+        // Fetch persisted wellness daily summary (persisted last seven scores)
+        let persistedWellness = null
+        try {
+          const dsResp = await wellnessAPI.getDailySummary().catch(() => null)
+          const s = dsResp?.summary ?? dsResp
+          if (s) {
+            persistedWellness = s.wellness_score ?? (Array.isArray(s.last_seven_scores) && s.last_seven_scores.length > 0 ? s.last_seven_scores[0] : null)
+          }
+        } catch (e) {
+          console.debug('Failed to load persisted wellness summary', e)
+        }
+
         // Key metrics
-        const wellnessScore = Number.isFinite(summary.wellnessScoreToday) ? Math.round(summary.wellnessScoreToday) : null
+        const wellnessScore = persistedWellness !== null ? Math.round(persistedWellness) : (Number.isFinite(summary.wellnessScoreToday) ? Math.round(summary.wellnessScoreToday) : null)
         const attentionLevel = Number.isFinite(summary.attentionToday) ? Math.round(summary.attentionToday) : null
 
         // Learning distribution -> percentages
