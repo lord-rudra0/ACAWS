@@ -70,6 +70,15 @@ learning_router = APIRouter()
 wellness_router = APIRouter()
 analytics_router = APIRouter()
 
+# Service singletons (persist across requests)
+try:
+    emotion_service = EmotionAnalysisService()
+    attention_service = AttentionTrackingService()
+    adaptive_service = AdaptiveLearningService()
+    wellness_service = WellnessService()
+except Exception as e:
+    logger.error(f"Service initialization failed: {e}")
+
 # Pydantic models
 class FrameData(BaseModel):
     frame: str
@@ -104,10 +113,7 @@ async def analyze_emotion(
     try:
         user = await verify_token(credentials.credentials)
         
-        # Get emotion service instance
-        emotion_service = EmotionAnalysisService()
-        
-        # Analyze frame
+        # Use shared singleton service instance
         result = await emotion_service.analyze_frame(frame_data.frame)
 
         # Persist full payload to MongoDB
@@ -136,7 +142,7 @@ async def get_emotion_trends(
     try:
         user = await verify_token(credentials.credentials)
         
-        emotion_service = EmotionAnalysisService()
+        # Use shared singleton service instance
         trends = emotion_service.get_emotion_trends(time_window)
         
         return {
@@ -159,7 +165,7 @@ async def track_attention(
     try:
         user = await verify_token(credentials.credentials)
         
-        attention_service = AttentionTrackingService()
+        # Use shared singleton service instance
         result = await attention_service.track_attention(frame_data.frame)
 
         # Persist full payload to MongoDB
@@ -188,7 +194,7 @@ async def get_attention_trends(
     try:
         user = await verify_token(credentials.credentials)
         
-        attention_service = AttentionTrackingService()
+        # Use shared singleton service instance
         trends = attention_service.get_attention_trends(time_window)
         
         return {
@@ -213,8 +219,7 @@ async def adapt_content(
     try:
         user = await verify_token(credentials.credentials)
         
-        adaptive_service = AdaptiveLearningService()
-        
+        # Use shared singleton service instance
         result = await adaptive_service.adapt_content(
             user_id,
             cognitive_state.dict(),
@@ -255,8 +260,7 @@ async def generate_learning_path(
     try:
         user = await verify_token(credentials.credentials)
         
-        adaptive_service = AdaptiveLearningService()
-        
+        # Use shared singleton service instance
         result = await adaptive_service.generate_learning_path(
             user_id, subject, target_competency
         )
@@ -281,8 +285,7 @@ async def recommend_next_content(
     try:
         user = await verify_token(credentials.credentials)
         
-        adaptive_service = AdaptiveLearningService()
-        
+        # Use shared singleton service instance
         result = await adaptive_service.recommend_next_content(user_id, performance_data)
         
         return {
@@ -306,8 +309,7 @@ async def track_wellness_metrics(
     try:
         user = await verify_token(credentials.credentials)
         
-        wellness_service = WellnessService()
-        
+        # Use shared singleton service instance
         result = await wellness_service.track_wellness_metrics(
             user_id, metrics.dict()
         )
@@ -332,8 +334,7 @@ async def suggest_break_activities(
     try:
         user = await verify_token(credentials.credentials)
         
-        wellness_service = WellnessService()
-        
+        # Use shared singleton service instance
         result = await wellness_service.suggest_break_activities(user_id, current_state)
         
         return {
@@ -355,8 +356,7 @@ async def get_wellness_insights(
     try:
         user = await verify_token(credentials.credentials)
         
-        wellness_service = WellnessService()
-        
+        # Use shared singleton service instance
         result = await wellness_service.generate_wellness_insights(user_id)
         
         return {
@@ -380,11 +380,7 @@ async def get_analytics_dashboard(
     try:
         user = await verify_token(credentials.credentials)
         
-        # Aggregate data from all services
-        emotion_service = EmotionAnalysisService()
-        attention_service = AttentionTrackingService()
-        wellness_service = WellnessService()
-        adaptive_service = AdaptiveLearningService()
+        # Aggregate data from shared singleton services
         
         # Get trends from each service
         emotion_trends = emotion_service.get_emotion_trends()

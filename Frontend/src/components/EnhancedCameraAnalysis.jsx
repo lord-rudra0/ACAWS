@@ -346,8 +346,12 @@ const EnhancedCameraAnalysis = ({
         ...prev.gazePatterns.slice(-19),
         attention?.gazeAnalysis || { direction: 'center' }
       ],
-      cognitiveLoad: attention?.cognitiveLoad?.level * 100 || prev.cognitiveLoad,
-      emotionalStability: emotion?.advancedMetrics?.emotionalStability * 100 || prev.emotionalStability,
+      cognitiveLoad: (attention?.cognitiveLoad?.level != null)
+        ? attention.cognitiveLoad.level * 100
+        : prev.cognitiveLoad,
+      emotionalStability: (emotion?.advancedMetrics?.emotionalStability != null)
+        ? emotion.advancedMetrics.emotionalStability * 100
+        : prev.emotionalStability,
       attentionConsistency: calculateAttentionConsistency(prev.gazePatterns)
     }))
   }

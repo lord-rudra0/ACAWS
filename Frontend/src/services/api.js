@@ -114,10 +114,20 @@ const expressAPI = createAPIInstance(
   'Express'
 )
 
+// Log Express API connection
+expressAPI.get('/health')
+  .then(() => console.log('✅ Successfully connected to Express backend'))
+  .catch(err => console.error('❌ Could not connect to Express backend:', err.message))
+
 const pythonAPI = createAPIInstance(
-  import.meta.env.VITE_PYTHON_API_URL || 'http://localhost:5000',
+  '/api',  // This will be proxied to http://localhost:8000 by Vite
   'Python'
 )
+
+// Log Python API connection
+pythonAPI.get('/health')
+  .then(() => console.log('✅ Successfully connected to Python backend'))
+  .catch(err => console.error('❌ Could not connect to Python backend:', err.message))
 
 // Enhanced API service functions with better error handling
 export const authAPI = {

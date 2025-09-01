@@ -4,6 +4,35 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 
 const router = express.Router()
 
+// Simple in-memory concurrency + pacing limiter
+const MAX_CONCURRENT = Number(process.env.GEMINI_MAX_CONCURRENT || 1)
+const MIN_INTERVAL_MS = Number(process.env.GEMINI_MIN_INTERVAL_MS || 1200)
+let activeCount = 0
+let lastCallAt = 0
+const waitQueue = []
+
+async function acquireSlot() {
+  const canRun = () => activeCount < MAX_CONCURRENT && (Date.now() - lastCallAt) >= MIN_INTERVAL_MS
+  if (canRun()) {
+    activeCount += 1
+    return
+  }
+  await new Promise(resolve => waitQueue.push(resolve))
+  // Woken up: take slot
+  activeCount += 1
+}
+
+function releaseSlot() {
+  activeCount = Math.max(0, activeCount - 1)
+  lastCallAt = Date.now()
+  // Wake next waiter after respecting pacing window
+  const next = waitQueue.shift()
+  if (next) {
+    const delay = Math.max(0, MIN_INTERVAL_MS - (Date.now() - lastCallAt))
+    setTimeout(() => next(), delay)
+  }
+}
+
 function getGeminiClient() {
   const apiKey = process.env.BACKEND_GEMINI_API_KEY
   if (!apiKey) {
@@ -49,6 +78,7 @@ router.post('/gemini', asyncHandler(async (req, res) => {
   }
 
   try {
+    await acquireSlot()
     const genAI = getGeminiClient()
     const genModel = genAI.getGenerativeModel({ model, systemInstruction })
 
@@ -62,6 +92,8 @@ router.post('/gemini', asyncHandler(async (req, res) => {
     return res.json({ success: true, model, output: text })
   } catch (error) {
     return handleGeminiError(res, error)
+  } finally {
+    releaseSlot()
   }
 }))
 
@@ -78,6 +110,7 @@ router.post('/gemini-vision', asyncHandler(async (req, res) => {
     // Support data URL or raw base64
     const base64 = imageData.includes(',') ? imageData.split(',')[1] : imageData
 
+    await acquireSlot()
     const genAI = getGeminiClient()
     const visionModel = genAI.getGenerativeModel({ model })
 
@@ -105,6 +138,8 @@ router.post('/gemini-vision', asyncHandler(async (req, res) => {
     return res.json({ success: true, model, output: text })
   } catch (error) {
     return handleGeminiError(res, error)
+  } finally {
+    releaseSlot()
   }
 }))
 

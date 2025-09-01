@@ -25,6 +25,11 @@ class GeminiService {
       tokens: Number(import.meta.env.VITE_GEMINI_RATE_CAPACITY) || 5,
       lastRefill: Date.now()
     }
+
+    // Concurrency limiter to avoid bursts (helps prevent 429)
+    this.maxConcurrent = Number(import.meta.env.VITE_GEMINI_MAX_CONCURRENT) || 1
+    this._active = 0
+    this._queue = []
   }
 
   // Token bucket acquire; waits when empty to spread requests
@@ -47,6 +52,31 @@ class GeminiService {
 
   _wait(ms) { return new Promise(resolve => setTimeout(resolve, ms)) }
 
+  async _acquireSlot() {
+    if (this._active < this.maxConcurrent) {
+      this._active += 1
+      return
+    }
+    await new Promise(resolve => this._queue.push(resolve))
+    // When dequeued, we own the slot
+    this._active += 1
+  }
+
+  _releaseSlot() {
+    this._active = Math.max(0, this._active - 1)
+    const next = this._queue.shift()
+    if (next) next()
+  }
+
+  async _withConcurrency(fn) {
+    await this._acquireSlot()
+    try {
+      return await fn()
+    } finally {
+      this._releaseSlot()
+    }
+  }
+
   async _requestWithRetry(fn, { maxRetries = 3, baseDelay = 500 } = {}) {
     let attempt = 0
     let lastErr
@@ -57,13 +87,14 @@ class GeminiService {
         lastErr = err
         const status = err?.status || err?.response?.status
         const isRateLimited = status === 429 || /rate limit/i.test(String(err))
-        const isRetryable = isRateLimited || (status >= 500 && status < 600)
+        const isAbort = err?.name === 'AbortError' || /abort(ed)?/i.test(String(err?.message || err))
+        const isRetryable = isRateLimited || isAbort || (status >= 500 && status < 600)
         if (!isRetryable || attempt === maxRetries) break
         // Respect Retry-After when available
         const retryAfter = Number(err?.headers?.get?.('retry-after'))
         const delay = Number.isFinite(retryAfter)
           ? retryAfter * 1000
-          : Math.min(8000, baseDelay * Math.pow(2, attempt)) + Math.floor(Math.random() * 200)
+          : Math.min(10000, baseDelay * Math.pow(2, attempt)) + Math.floor(Math.random() * 300)
         await this._wait(delay)
         attempt += 1
       }
@@ -73,7 +104,7 @@ class GeminiService {
 
   getTimeoutMs() {
     const val = Number(import.meta.env.VITE_GEMINI_TIMEOUT_MS)
-    return Number.isFinite(val) && val > 0 ? val : 30000
+    return Number.isFinite(val) && val > 0 ? val : 60000
   }
 
   // Unified text generation path: uses backend proxy when enabled
@@ -110,7 +141,7 @@ class GeminiService {
           clearTimeout(timeoutId)
         }
       }
-      return this._requestWithRetry(doFetch)
+      return this._withConcurrency(() => this._requestWithRetry(doFetch))
     }
 
     // Fallback to direct SDK usage when not proxying
@@ -122,7 +153,7 @@ class GeminiService {
       const response = await result.response
       return response.text()
     }
-    return this._requestWithRetry(callSDK)
+    return this._withConcurrency(() => this._requestWithRetry(callSDK))
   }
 
   async generatePersonalizedExplanation(topic, userProfile, cognitiveState) {
@@ -299,7 +330,7 @@ class GeminiService {
             clearTimeout(timeoutId)
           }
         }
-        const analysisText = await this._requestWithRetry(doFetch)
+        const analysisText = await this._withConcurrency(() => this._requestWithRetry(doFetch))
         return {
           analysis: analysisText,
           concepts: this.extractConcepts(analysisText),
@@ -336,7 +367,7 @@ class GeminiService {
         const response = await result.response
         return response.text()
       }
-      const analysisText = await this._requestWithRetry(callSDK)
+      const analysisText = await this._withConcurrency(() => this._requestWithRetry(callSDK))
       return {
         analysis: analysisText,
         concepts: this.extractConcepts(analysisText),

@@ -105,7 +105,8 @@ app = FastAPI(
 
 # CORS middleware (allow configure via env, default to common dev ports)
 cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001,http://localhost:5173")
-cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+# Allow all origins for development
+cors_origins = ["*"]  # In production, replace with specific origins
 
 app.add_middleware(
     CORSMiddleware,
@@ -122,11 +123,17 @@ security = HTTPBearer()
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
+    from datetime import datetime
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    logger.info("🔌 Health check request received for Python backend")
+    
     return {
         "status": "healthy",
         "service": "ACAWS Python Backend",
         "version": "1.0.0",
-        "timestamp": "2024-01-01T00:00:00Z"
+        "timestamp": datetime.utcnow().isoformat() + "Z"
     }
 
 # WebSocket endpoint for real-time processing

@@ -53,13 +53,30 @@ const limiter = rateLimit({
 // Middleware
 app.use(helmet())
 app.use(cors({
-  origin: corsOriginsArr,
+  origin: function (origin, callback) {
+    if (!origin || corsOriginsArr.includes(origin)) {
+      callback(null, true)
+    } else {
+      callback(new Error('Not allowed by CORS'))
+    }
+  },
   credentials: true
 }))
 app.use(morgan('combined'))
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true }))
 app.use(limiter)
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  console.log('🔌 Health check request received for Express backend')
+  res.status(200).json({
+    status: 'healthy',
+    service: 'ACAWS Express Backend',
+    version: '1.0.0',
+    timestamp: new Date().toISOString()
+  })
+})
 
 // Routes
 app.use('/api/auth', authRoutes)

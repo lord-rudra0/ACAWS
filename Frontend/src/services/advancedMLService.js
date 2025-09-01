@@ -10,6 +10,14 @@ const EXPRESS_API = env.VITE_API_URL
 // Python backend base URL: prefer VITE_PYTHON_API_URL, then VITE_PY_BACKEND_URL, else localhost
 const DIRECT_PY = env.VITE_PYTHON_API_URL || env.VITE_PY_BACKEND_URL || 'http://localhost:5000'
 const PY_BACKEND = USE_PROXY && EXPRESS_API ? `${EXPRESS_API}/api/python` : DIRECT_PY
+// Debug flag for verbose ML logging
+const DEBUG_ML = String(env.VITE_DEBUG_ADV_ML || '').toLowerCase() === 'true'
+
+function dbg(...args) {
+  try {
+    if (DEBUG_ML) console.debug('[AdvancedML]', ...args)
+  } catch {}
+}
 
 // Build final Python endpoint path correctly for proxied vs direct calls
 function pyEndpoint(path) {
@@ -17,10 +25,14 @@ function pyEndpoint(path) {
   const base = PY_BACKEND
   if (USE_PROXY) {
     // Express mounts proxy at '/api/python' and expects '/emotion/...'
-    return `${base}${path}`
+    const url = `${base}${path}`
+    dbg('pyEndpoint (proxy)', { url, base, path })
+    return url
   }
   // Direct FastAPI expects '/api/...' prefix
-  return `${base}/api${path}`
+  const url = `${base}/api${path}`
+  dbg('pyEndpoint (direct)', { url, base, path })
+  return url
 }
 
 function getAuthHeader() {
@@ -66,6 +78,7 @@ class AdvancedMLService {
   async _performInitialization() {
     try {
       console.log('🚀 Initializing Advanced ML Service...')
+      dbg('config', { USE_PROXY, EXPRESS_API, DIRECT_PY, PY_BACKEND })
       
       // Load face-api.js models
       await this.loadFaceAPIModels()
@@ -86,18 +99,35 @@ class AdvancedMLService {
 
   async loadFaceAPIModels() {
     try {
-      const MODEL_URL = '/models'
-      
+      const LOCAL_MODEL_URL = '/models'
+
+      try {
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri(LOCAL_MODEL_URL),
+          faceapi.nets.faceLandmark68Net.loadFromUri(LOCAL_MODEL_URL),
+          faceapi.nets.faceRecognitionNet.loadFromUri(LOCAL_MODEL_URL),
+          faceapi.nets.faceExpressionNet.loadFromUri(LOCAL_MODEL_URL)
+        ])
+        console.log('✅ Face-API models loaded from /models')
+        return
+      } catch (e1) {
+        console.warn('⚠️ Failed to load Face-API models from /models, retrying via CDN...', e1?.message)
+        dbg('face-api local load error', e1)
+      }
+
+      // CDN fallback for weights if local /models is missing
+      // Use official GitHub Pages where demo weights are hosted
+      const CDN_MODEL_URL = 'https://justadudewhohacks.github.io/face-api.js/models'
       await Promise.all([
-        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
-        faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL)
+        faceapi.nets.tinyFaceDetector.loadFromUri(CDN_MODEL_URL),
+        faceapi.nets.faceLandmark68Net.loadFromUri(CDN_MODEL_URL),
+        faceapi.nets.faceRecognitionNet.loadFromUri(CDN_MODEL_URL),
+        faceapi.nets.faceExpressionNet.loadFromUri(CDN_MODEL_URL)
       ])
-      
-      console.log('✅ Face-API models loaded')
+      console.log('✅ Face-API models loaded from CDN')
     } catch (error) {
-      console.warn('⚠️ Face-API models not available, using fallback detection')
+      console.warn('⚠️ Face-API models could not be loaded locally or via CDN; using fallback detection', error?.message)
+      dbg('face-api load failure', error)
     }
   }
 
@@ -314,6 +344,7 @@ class AdvancedMLService {
     try {
       // 1) Try Python backend for real model result
       const pyRes = await this._pyAnalyzeEmotion(imageData)
+      dbg('emotion pyRes', pyRes)
       if (pyRes) return pyRes
 
       // 2) Fallback to local analysis if backend unavailable
@@ -356,19 +387,29 @@ class AdvancedMLService {
       }
     } catch (error) {
       console.error('Advanced emotion analysis failed:', error)
+      dbg('emotion analysis error', error)
       return this.getFallbackEmotionAnalysis()
     }
   }
 
   async _pyAnalyzeEmotion(imageData) {
     try {
-      const resp = await fetch(pyEndpoint('/emotion/analyze'), {
+      const url = pyEndpoint('/emotion/analyze')
+      dbg('fetch emotion', { url, USE_PROXY })
+      const resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
         credentials: USE_PROXY ? 'include' : 'same-origin',
         body: JSON.stringify({ frame: imageData, timestamp: new Date().toISOString() })
       })
-      if (!resp.ok) return null
+      dbg('emotion resp', { ok: resp.ok, status: resp.status })
+      if (!resp.ok) {
+        try {
+          const txt = await resp.text()
+          dbg('emotion non-ok body', txt)
+        } catch {}
+        return null
+      }
       const json = await resp.json()
       const data = json?.data || json
       if (!data) return null
@@ -387,7 +428,8 @@ class AdvancedMLService {
         emotionIntensity: data.emotionIntensity || null,
         timestamp: new Date().toISOString()
       }
-    } catch {
+    } catch (e) {
+      dbg('emotion fetch error', e)
       return null
     }
   }
@@ -531,6 +573,7 @@ class AdvancedMLService {
     try {
       // 1) Try Python backend for real model result (returns score + confidence)
       const pyRes = await this._pyTrackAttention(imageData)
+      dbg('attention pyRes', pyRes)
       
       // 2) Optionally augment with local landmark-based details for UI
       const img = await this.loadImageFromData(imageData)
@@ -551,7 +594,10 @@ class AdvancedMLService {
           distractionIndicators: []
         }
       }
-      if (detections.length === 0) return this.getFallbackAttentionAnalysis()
+      if (detections.length === 0) {
+        dbg('attention fallback: no detections and no pyRes')
+        return this.getFallbackAttentionAnalysis()
+      }
 
       const detection = detections[0]
       const landmarks = detection.landmarks.positions
@@ -586,24 +632,35 @@ class AdvancedMLService {
       }
     } catch (error) {
       console.error('Advanced attention analysis failed:', error)
+      dbg('attention analysis error', error)
       return this.getFallbackAttentionAnalysis()
     }
   }
 
   async _pyTrackAttention(imageData) {
     try {
-      const resp = await fetch(pyEndpoint('/attention/track'), {
+      const url = pyEndpoint('/attention/track')
+      dbg('fetch attention', { url, USE_PROXY })
+      const resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
         credentials: USE_PROXY ? 'include' : 'same-origin',
         body: JSON.stringify({ frame: imageData, timestamp: new Date().toISOString() })
       })
-      if (!resp.ok) return null
+      dbg('attention resp', { ok: resp.ok, status: resp.status })
+      if (!resp.ok) {
+        try {
+          const txt = await resp.text()
+          dbg('attention non-ok body', txt)
+        } catch {}
+        return null
+      }
       const json = await resp.json()
       const data = json?.data || json
       if (!data) return null
       return { attention: data.attention, confidence: data.confidence }
-    } catch {
+    } catch (e) {
+      dbg('attention fetch error', e)
       return null
     }
   }
