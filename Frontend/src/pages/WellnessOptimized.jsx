@@ -18,59 +18,48 @@ import {
 } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { wellnessAPI } from '../services/api'
- 
 
-const Wellness = () => {
+const WellnessOptimized = () => {
+  // Core state
   const [currentMood, setCurrentMood] = useState(null)
   const [stressLevel, setStressLevel] = useState(3)
   const [energyLevel, setEnergyLevel] = useState(7)
   const [isBreakActive, setIsBreakActive] = useState(false)
   const [breakTimer, setBreakTimer] = useState(0)
-  const [breathingExercise, setBreathingExercise] = useState({
-    active: false,
-    phase: 'inhale', // inhale, hold, exhale
-    count: 4
-  })
+  const [breakStartTime, setBreakStartTime] = useState(null)
 
+  // Wellness data
   const [wellnessData, setWellnessData] = useState([])
   const [wellnessScore, setWellnessScore] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [breakStartTime, setBreakStartTime] = useState(null)
 
-  // AI/Analytics derived state
-  const [tipsLoading, setTipsLoading] = useState(false)
-  const [tipsError, setTipsError] = useState(null)
-  const [aiTips, setAiTips] = useState([])
-  const [dailyGoals, setDailyGoals] = useState([])
-  const [goalsLoading, setGoalsLoading] = useState(false)
-  const [summary, setSummary] = useState({ sessions: null, goalsAchieved: null, goalsTotal: null, avgFocus: null })
-  const [dailySaved, setDailySaved] = useState(false)
-
-  // Local records tracked only from this page interactions
-  const [entriesToday, setEntriesToday] = useState([]) // {mood, stress, energy, timestamp}
-  const [breaksToday, setBreaksToday] = useState([]) // {duration_seconds, started_at, ended_at, type}
-  const [breathingCount, setBreathingCount] = useState(0)
-  const [hydrationCount, setHydrationCount] = useState(0)
-
+  // ML wellness
   const [mlWellnessScore, setMlWellnessScore] = useState(null)
   const [mlLoading, setMlLoading] = useState(false)
   const [mlError, setMlError] = useState(null)
 
+  // Input form
   const [inputForm, setInputForm] = useState({
     mood: { score: '', tags: '', note: '' },
-    stress: { level: 5 },
-    energy: { level: 7 },
-    sleep: { hours: 7, quality: 'good' },
-    activity: { minutes: 30, type: 'walking' },
-    nutrition: { score: 7 },
-    hydration: { glasses: 6 },
-    screen_time: { hours: 4 },
+    stress: { level: '' },
+    energy: { level: '' },
+    sleep: { hours: '', quality: '' },
+    activity: { minutes: '', type: '' },
+    nutrition: { score: '' },
+    hydration: { glasses: '' },
+    screen_time: { hours: '' },
     custom: ''
   })
   const [inputResult, setInputResult] = useState(null)
   const [inputLoading, setInputLoading] = useState(false)
   const [inputError, setInputError] = useState(null)
+
+  // Local tracking
+  const [entriesToday, setEntriesToday] = useState([])
+  const [breaksToday, setBreaksToday] = useState([])
+  const [breathingCount, setBreathingCount] = useState(0)
+  const [hydrationCount, setHydrationCount] = useState(0)
 
   // Memoized values for performance
   const moods = useMemo(() => [
@@ -98,28 +87,28 @@ const Wellness = () => {
     },
     {
       title: 'Mindful Break',
-      description: 'Quick mindfulness meditation',
+      description: 'Guided meditation for stress relief',
       icon: Brain,
-      duration: '10 min',
+      duration: '3 min',
       action: () => startMindfulBreak()
     },
     {
       title: 'Hydration Reminder',
-      description: 'Time to drink some water',
+      description: 'Drink water for better focus',
       icon: Coffee,
-      duration: '30 sec',
-      action: () => showHydrationReminder()
+      duration: '1 min',
+      action: () => recordHydration()
     }
   ], [])
 
   // Memoized wellness score calculation
   const calculatedWellnessScore = useMemo(() => {
-    if (!Array.isArray(entriesToday) || entriesToday.length === 0) return null
+    if (entriesToday.length === 0) return null
     
     const totalScore = entriesToday.reduce((sum, entry) => {
-      const moodScore = (entry.mood / 5) * 40 // 40% weight
-      const stressScore = ((10 - entry.stress) / 10) * 30 // 30% weight (inverted)
-      const energyScore = (entry.energy / 10) * 30 // 30% weight
+      const moodScore = (entry.mood / 5) * 40
+      const stressScore = ((10 - entry.stress) / 10) * 30
+      const energyScore = (entry.energy / 10) * 30
       return sum + moodScore + stressScore + energyScore
     }, 0)
     
@@ -128,9 +117,6 @@ const Wellness = () => {
 
   // Memoized chart data
   const chartData = useMemo(() => {
-    if (!Array.isArray(wellnessData) || wellnessData.length === 0) {
-      return []
-    }
     return wellnessData.slice(-7).map((entry, index) => ({
       day: `Day ${index + 1}`,
       score: entry.wellness_score || 0,
@@ -140,19 +126,14 @@ const Wellness = () => {
   }, [wellnessData])
 
   // Memoized daily goals
-  const memoizedDailyGoals = useMemo(() => [
-    { label: 'Breathing Exercises', current: breathingCount || 0, target: 3, completed: (breathingCount || 0) >= 3 },
-    { label: 'Hydration', current: hydrationCount || 0, target: 8, completed: (hydrationCount || 0) >= 8 },
-    { label: 'Wellness Check-ins', current: Array.isArray(entriesToday) ? entriesToday.length : 0, target: 2, completed: (Array.isArray(entriesToday) ? entriesToday.length : 0) >= 2 },
-    { label: 'Break Sessions', current: Array.isArray(breaksToday) ? breaksToday.length : 0, target: 4, completed: (Array.isArray(breaksToday) ? breaksToday.length : 0) >= 4 }
-  ], [breathingCount, hydrationCount, entriesToday, breaksToday])
+  const dailyGoals = useMemo(() => [
+    { label: 'Breathing Exercises', current: breathingCount, target: 3, completed: breathingCount >= 3 },
+    { label: 'Hydration', current: hydrationCount, target: 8, completed: hydrationCount >= 8 },
+    { label: 'Wellness Check-ins', current: entriesToday.length, target: 2, completed: entriesToday.length >= 2 },
+    { label: 'Break Sessions', current: breaksToday.length, target: 4, completed: breaksToday.length >= 4 }
+  ], [breathingCount, hydrationCount, entriesToday.length, breaksToday.length])
 
-  // Update daily goals when dependencies change
-  useEffect(() => {
-    setDailyGoals(memoizedDailyGoals)
-  }, [memoizedDailyGoals])
-
-  // Optimized break timer
+  // Break timer effect
   useEffect(() => {
     let interval
     if (isBreakActive && breakStartTime) {
@@ -163,22 +144,6 @@ const Wellness = () => {
     }
     return () => clearInterval(interval)
   }, [isBreakActive, breakStartTime])
-
-  // Optimized breathing exercise timer
-  useEffect(() => {
-    let interval
-    if (breathingExercise.active) {
-      interval = setInterval(() => {
-        setBreathingExercise(prev => {
-          if (prev.count <= 1) {
-            return { ...prev, active: false, count: 4 }
-          }
-          return { ...prev, count: prev.count - 1 }
-        })
-      }, 1000)
-    }
-    return () => clearInterval(interval)
-  }, [breathingExercise.active])
 
   // Memoized event handlers
   const handleMoodSelect = useCallback((mood) => {
@@ -198,18 +163,14 @@ const Wellness = () => {
     
     try {
       const data = {
-        mood: { 
-          score: inputForm.mood.score || 5, 
-          tags: (inputForm.mood.tags || '').split(',').filter(t => t.trim()), 
-          note: inputForm.mood.note || '' 
-        },
-        stress: { level: inputForm.stress.level || 5, sources: [], note: '' },
-        energy: { level: inputForm.energy.level || 5, note: '' },
-        sleep: { hours: inputForm.sleep.hours || 7, quality: inputForm.sleep.quality || 'good', note: '' },
-        activity: { minutes: inputForm.activity.minutes || 30, type: inputForm.activity.type || 'walking', note: '' },
-        nutrition: { score: inputForm.nutrition.score || 7, note: '' },
-        hydration: { glasses: inputForm.hydration.glasses || 6, note: '' },
-        screen_time: { hours: inputForm.screen_time.hours || 4, note: '' }
+        mood: { score: inputForm.mood.score || 5, tags: inputForm.mood.tags.split(',').filter(t => t.trim()), note: inputForm.mood.note },
+        stress: { level: inputForm.mood.stress || 5, sources: [], note: '' },
+        energy: { level: inputForm.mood.energy || 5, note: '' },
+        sleep: { hours: inputForm.mood.sleep.hours || 7, quality: inputForm.mood.sleep.quality || 'good', note: '' },
+        activity: { minutes: inputForm.mood.activity.minutes || 30, type: inputForm.mood.activity.type || 'walking', note: '' },
+        nutrition: { score: inputForm.mood.nutrition || 7, note: '' },
+        hydration: { glasses: inputForm.mood.hydration || 6, note: '' },
+        screen_time: { hours: inputForm.mood.screen_time || 4, note: '' }
       }
 
       if (inputForm.custom) {
@@ -221,13 +182,13 @@ const Wellness = () => {
       setMlWellnessScore(Math.round(result.wellness_score))
       setInputForm({
         mood: { score: '', tags: '', note: '' },
-        stress: { level: 5 },
-        energy: { level: 7 },
-        sleep: { hours: 7, quality: 'good' },
-        activity: { minutes: 30, type: 'walking' },
-        nutrition: { score: 7 },
-        hydration: { glasses: 6 },
-        screen_time: { hours: 4 },
+        stress: { level: '' },
+        energy: { level: '' },
+        sleep: { hours: '', quality: '' },
+        activity: { minutes: '', type: '' },
+        nutrition: { score: '' },
+        hydration: { glasses: '' },
+        screen_time: { hours: '' },
         custom: ''
       })
     } catch (err) {
@@ -239,7 +200,6 @@ const Wellness = () => {
 
   const handleToggleBreak = useCallback(() => {
     if (isBreakActive) {
-      // End break
       const breakDuration = Math.floor((Date.now() - breakStartTime) / 1000)
       const newBreak = {
         duration_seconds: breakDuration,
@@ -252,24 +212,21 @@ const Wellness = () => {
       setBreakStartTime(null)
       setBreakTimer(0)
     } else {
-      // Start break
-    setIsBreakActive(true)
+      setIsBreakActive(true)
       setBreakStartTime(Date.now())
     }
   }, [isBreakActive, breakStartTime])
 
   const startBreathingExercise = useCallback(() => {
-    setBreathingExercise({ active: true, phase: 'inhale', count: 4 })
     setBreathingCount(prev => prev + 1)
+    alert('Take 4 deep breaths, hold for 7, exhale for 8. Repeat 5 times.')
   }, [])
 
   const startEyeRest = useCallback(() => {
-    // Simple eye rest implementation
     alert('Look at something 20 feet away for 20 seconds. Take a deep breath.')
   }, [])
 
   const startMindfulBreak = useCallback(() => {
-    // Simple mindful break implementation
     alert('Close your eyes and take 3 deep breaths. Focus on your breathing.')
   }, [])
 
@@ -277,41 +234,26 @@ const Wellness = () => {
     setHydrationCount(prev => prev + 1)
   }, [])
 
-  const showHydrationReminder = useCallback(() => {
-    alert('💧 Time to hydrate! Drink a glass of water.')
-    setHydrationCount(prev => prev + 1)
-  }, [])
-
-  // Fetch wellness analytics on mount
+  // Fetch wellness data on mount
   useEffect(() => {
     const fetchWellness = async () => {
       try {
-        const [history, insights, moodData] = await Promise.all([
-          wellnessAPI.getHistory(7).catch(() => null), // Get last 7 days instead of getAnalytics
-          wellnessAPI.getInsights().catch(() => null),
-          wellnessAPI.getMoodAnalytics('week').catch(() => null)
+        const [analytics, insights] = await Promise.all([
+          wellnessAPI.getAnalytics().catch(() => null),
+          wellnessAPI.getInsights().catch(() => null)
         ])
         
-        // Ensure we always set arrays, even if API returns null/undefined
-        setWellnessData(Array.isArray(history?.data) ? history.data : Array.isArray(history) ? history : [])
-        setAiTips(Array.isArray(insights?.data) ? insights.data : Array.isArray(insights) ? insights : [])
-        setSummary(moodData?.summary || {})
+        if (analytics) setWellnessData(analytics.data || [])
       } catch (error) {
         console.error('Failed to fetch wellness data:', error)
-        // Set empty arrays on error to prevent crashes
-        setWellnessData([])
-        setAiTips([])
-        setSummary({})
       }
     }
     
     fetchWellness()
   }, [])
 
-  // Memoized wellness score display
-  const displayWellnessScore = useMemo(() => {
-    return mlWellnessScore || calculatedWellnessScore || wellnessScore || '—'
-  }, [mlWellnessScore, calculatedWellnessScore, wellnessScore])
+  // Display wellness score
+  const displayWellnessScore = mlWellnessScore || calculatedWellnessScore || wellnessScore || '—'
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 py-8">
@@ -366,8 +308,8 @@ const Wellness = () => {
                     className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
                     placeholder="8"
                   />
-              </div>
-
+                </div>
+                
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                     Stress Level (1-10)
@@ -386,7 +328,7 @@ const Wellness = () => {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                     Energy Level (1-10)
-                    </label>
+                  </label>
                   <input
                     type="number"
                     min="1"
@@ -444,19 +386,6 @@ const Wellness = () => {
                     placeholder="45"
                   />
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Activity Type
-                    </label>
-                  <input
-                    type="text"
-                    value={inputForm.activity.type}
-                    onChange={(e) => setInputForm(prev => ({ ...prev, activity: { ...prev.activity, type: e.target.value } }))}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
-                    placeholder="walking"
-                  />
-                  </div>
                 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -585,33 +514,23 @@ const Wellness = () => {
                 </p>
               </div>
 
-              <div className="flex justify-center space-x-4">
+              <div className="flex space-x-2">
                 <button
                   onClick={handleToggleBreak}
-                  className={`px-6 py-2 rounded-lg font-medium transition-colors ${
-                    isBreakActive
-                      ? 'bg-red-500 hover:bg-red-600 text-white'
-                      : 'bg-green-500 hover:bg-green-600 text-white'
-                  }`}
+                  className="flex-1 btn-primary flex items-center justify-center space-x-2"
                 >
-                  {isBreakActive ? (
-                    <>
-                      <Pause className="w-4 h-4 inline mr-2" />
-                      End Break
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-4 h-4 inline mr-2" />
-                      Start Break
-                    </>
-                  )}
+                  {isBreakActive ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                  <span>{isBreakActive ? 'Pause' : 'Start'}</span>
                 </button>
                 <button
-                  onClick={() => setBreakTimer(0)}
-                  className="px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded-lg transition-colors"
+                  onClick={() => {
+                    setIsBreakActive(false)
+                    setBreakTimer(0)
+                    setBreakStartTime(null)
+                  }}
+                  className="p-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors"
                 >
-                  <RotateCcw className="w-4 h-4 inline mr-2" />
-                  Reset
+                  <RotateCcw className="w-4 h-4" />
                 </button>
               </div>
             </div>
@@ -621,28 +540,29 @@ const Wellness = () => {
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
                 Wellness Activities
               </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              
+              <div className="space-y-3">
                 {wellnessActivities.map((activity, index) => {
                   const Icon = activity.icon
                   return (
                     <button
                       key={index}
                       onClick={activity.action}
-                      className="p-4 border border-gray-200 dark:border-gray-700 rounded-xl hover:border-primary-300 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-all duration-200 text-left"
+                      className="w-full flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-700 rounded-xl hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-all duration-300 group"
                     >
-                      <div className="flex items-center space-x-3">
-                        <Icon className="w-6 h-6 text-primary-500" />
-                        <div>
-                          <h4 className="font-medium text-gray-900 dark:text-white">
+                      <div className="w-10 h-10 bg-primary-100 dark:bg-primary-900/30 rounded-lg flex items-center justify-center group-hover:bg-primary-200 dark:group-hover:bg-primary-800/50 transition-colors">
+                        <Icon className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+                      </div>
+                      <div className="flex-1 text-left">
+                        <div className="font-medium text-gray-900 dark:text-white">
                           {activity.title}
-                          </h4>
-                          <p className="text-sm text-gray-600 dark:text-gray-400">
-                          {activity.description}
-                          </p>
-                          <span className="text-xs text-primary-600 dark:text-primary-400 font-medium">
-                            {activity.duration}
-                          </span>
                         </div>
+                        <div className="text-sm text-gray-600 dark:text-gray-400">
+                          {activity.description}
+                        </div>
+                      </div>
+                      <div className="text-sm text-gray-500 dark:text-gray-400">
+                        {activity.duration}
                       </div>
                     </button>
                   )
@@ -655,29 +575,23 @@ const Wellness = () => {
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
                 Daily Wellness Goals
               </h3>
-              {goalsLoading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3, 4].map((i) => (
-                    <div key={i} className="h-4 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
-                  ))}
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {dailyGoals.map((goal, index) => (
-                    <div key={index} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                      <span className="text-gray-700 dark:text-gray-300">{goal.label}</span>
-                      <div className="flex items-center space-x-2">
-                        <span className="text-sm text-gray-500 dark:text-gray-400">
-                          {goal.current}/{goal.target}
-                        </span>
-                        <div className={`w-3 h-3 rounded-full ${
-                          goal.completed ? 'bg-green-500' : 'bg-gray-400'
-                        }`} />
-                      </div>
+              <div className="space-y-4">
+                {dailyGoals.map((goal, index) => (
+                  <div key={index} className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <div className={`w-4 h-4 rounded-full ${
+                        goal.completed ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
+                      }`}></div>
+                      <span className="text-gray-900 dark:text-white font-medium">
+                        {goal.label}
+                      </span>
                     </div>
-                  ))}
-                </div>
-              )}
+                    <span className="text-sm text-gray-600 dark:text-gray-400">
+                      {goal.current}/{goal.target}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -688,26 +602,31 @@ const Wellness = () => {
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
                 Today's Summary
               </h3>
-              {summary.sessions !== null ? (
-                <div className="space-y-3">
-                  <div className="flex justify-between">
-                    <span className="text-gray-600 dark:text-gray-400">Sessions</span>
-                    <span className="font-medium text-gray-900 dark:text-white">{summary.sessions}</span>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Calendar className="w-4 h-4 text-primary-500" />
+                    <span className="text-gray-600 dark:text-gray-400">Study Sessions</span>
                   </div>
-                  <div className="flex justify-between">
-                      <span className="text-gray-600 dark:text-gray-400">Goals Achieved</span>
-                    <span className="font-medium text-gray-900 dark:text-white">{summary.goalsAchieved}/{summary.goalsTotal}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600 dark:text-gray-400">Avg Focus</span>
-                    <span className="font-medium text-gray-900 dark:text-white">{summary.avgFocus}%</span>
-                  </div>
+                  <span className="font-semibold text-gray-900 dark:text-white">—</span>
                 </div>
-              ) : (
-                <div className="text-gray-500 dark:text-gray-400 text-center py-4">
-                  No data yet today
+                
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Target className="w-4 h-4 text-success-500" />
+                    <span className="text-gray-600 dark:text-gray-400">Goals Achieved</span>
+                  </div>
+                  <span className="font-semibold text-gray-900 dark:text-white">—</span>
                 </div>
-              )}
+                
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <TrendingUp className="w-4 h-4 text-blue-500" />
+                    <span className="text-gray-600 dark:text-gray-400">Avg. Focus</span>
+                  </div>
+                  <span className="font-semibold text-gray-900 dark:text-white">—</span>
+                </div>
+              </div>
             </div>
 
             {/* Wellness Tips */}
@@ -715,31 +634,17 @@ const Wellness = () => {
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
                 Wellness Tips
               </h3>
-              {tipsLoading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3].map((i) => (
-                    <div key={i} className="h-4 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
-                  ))}
+              <div className="space-y-3">
+                <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg text-sm text-gray-700 dark:text-gray-300">
+                  Take regular breaks every 25 minutes to maintain focus and reduce eye strain.
                 </div>
-              ) : tipsError ? (
-                <div className="text-red-500 dark:text-red-400 text-sm">
-                  {tipsError}
+                <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg text-sm text-gray-700 dark:text-gray-300">
+                  Stay hydrated throughout the day for better cognitive performance.
                 </div>
-              ) : aiTips.length > 0 ? (
-                <div className="space-y-3">
-                  {aiTips.slice(0, 3).map((tip, index) => (
-                    <div key={index} className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-700">
-                      <p className="text-sm text-blue-800 dark:text-blue-200">
-                        {tip.text || tip}
-                      </p>
-                    </div>
-                  ))}
+                <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg text-sm text-gray-700 dark:text-gray-300">
+                  Practice deep breathing exercises to reduce stress and improve concentration.
                 </div>
-              ) : (
-                <div className="text-gray-500 dark:text-gray-400 text-center py-4">
-                  No tips available
-                </div>
-              )}
+              </div>
             </div>
           </div>
         </div>
@@ -748,4 +653,4 @@ const Wellness = () => {
   )
 }
 
-export default Wellness
+export default WellnessOptimized

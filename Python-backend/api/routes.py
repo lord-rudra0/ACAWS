@@ -16,6 +16,7 @@ if not MINIMAL_BOOT:
     from services.fatigue_service import FatigueDetectionService
     from services.adaptive_learning_service import AdaptiveLearningService
     from services.wellness_service import WellnessService
+    from services.wellness_ml_model import wellness_ml_model
 else:
     # Lightweight stubs to avoid heavy deps in minimal boot
     class EmotionAnalysisService:
@@ -367,6 +368,120 @@ async def get_wellness_insights(
         
     except Exception as e:
         logger.error(f"Wellness insights endpoint failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Get ML model information
+@wellness_router.get("/ml-model-info")
+async def get_ml_model_info(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """Get information about the wellness ML model"""
+    try:
+        user = await verify_token(credentials.credentials)
+        
+        model_info = wellness_ml_model.get_model_info()
+        
+        return {
+            "success": True,
+            "model_info": model_info,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"ML model info endpoint failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Test endpoint for ML model info (no auth required)
+@wellness_router.get("/test-ml-model-info")
+async def test_ml_model_info():
+    """Test endpoint for ML model info (no authentication required)"""
+    try:
+        model_info = wellness_ml_model.get_model_info()
+        
+        return {
+            "success": True,
+            "model_info": model_info,
+            "timestamp": datetime.now().isoformat(),
+            "note": "This is a test endpoint - no authentication required"
+        }
+        
+    except Exception as e:
+        logger.error(f"Test ML model info endpoint failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Test endpoint for tracking metrics (no auth required)
+@wellness_router.post("/test-track-metrics")
+async def test_track_wellness_metrics(metrics: dict):
+    """Test endpoint for tracking wellness metrics (no authentication required)"""
+    try:
+        # Use a test user ID
+        test_user_id = "test_user_123"
+        
+        # Track metrics and get ML prediction
+        result = await wellness_service.track_wellness_metrics(test_user_id, metrics)
+        
+        return {
+            "success": True,
+            "user_id": test_user_id,
+            "result": result,
+            "timestamp": datetime.now().isoformat(),
+            "note": "This is a test endpoint - no authentication required"
+        }
+        
+    except Exception as e:
+        logger.error(f"Test wellness metrics tracking failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Export user wellness data
+@wellness_router.get("/export-data/{user_id}")
+async def export_user_wellness_data(
+    user_id: str,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """Export user's wellness data for analysis"""
+    try:
+        user = await verify_token(credentials.credentials)
+        
+        # Only allow users to export their own data or admins
+        if user.get('id') != user_id and user.get('role') != 'admin':
+            raise HTTPException(status_code=403, detail="Not authorized to export this user's data")
+        
+        user_data = wellness_ml_model.export_user_data(user_id)
+        
+        return {
+            "success": True,
+            "user_data": user_data,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Data export endpoint failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Retrain ML model (admin only)
+@wellness_router.post("/retrain-model")
+async def retrain_ml_model(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    """Retrain the wellness ML model (admin only)"""
+    try:
+        user = await verify_token(credentials.credentials)
+        
+        # Only admins can retrain the model
+        if user.get('role') != 'admin':
+            raise HTTPException(status_code=403, detail="Admin access required")
+        
+        # Trigger model retraining
+        wellness_ml_model._retrain_model()
+        
+        return {
+            "success": True,
+            "message": "Model retraining initiated",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Model retraining endpoint failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Analytics Routes

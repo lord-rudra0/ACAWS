@@ -21,7 +21,7 @@ export default defineConfig({
       output: {
         manualChunks: {
           vendor: ['react', 'react-dom'],
-          ai: ['@google/generative-ai', '@tensorflow/tfjs', 'brain.js'],
+          ai: ['@google/generative-ai'],
           charts: ['recharts'],
           utils: ['axios', 'framer-motion', 'lucide-react']
         }
@@ -29,6 +29,6 @@ export default defineConfig({
     }
   },
   optimizeDeps: {
-    include: ['@tensorflow/tfjs', 'face-api.js', 'brain.js']
+    include: [] // Removed heavy dependencies
   }
 })

@@ -8,6 +8,15 @@ import { query } from '../config/database.js'
 
 const router = express.Router()
 
+// Test endpoint (no auth required)
+router.get('/test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Wellness API is working!',
+    timestamp: new Date().toISOString()
+  })
+})
+
 // Record wellness entry (MongoDB)
 router.post('/entries', [
   body('mood_score').isInt({ min: 1, max: 10 }).withMessage('Mood score must be 1-10'),
@@ -23,7 +32,7 @@ router.post('/entries', [
     })
   }
 
-  const userId = req.user.id
+  const userId = req.user?.id || '000000000000000000000000' // Default user ID for development
   const { 
     mood_score, 
     stress_level, 
@@ -74,7 +83,7 @@ router.post('/daily-summary', [
     return res.status(400).json({ success: false, message: 'Validation failed', errors: errors.array() })
   }
 
-  const userId = req.user.id
+  const userId = req.user?.id || '000000000000000000000000' // Default user ID for development
   const { date, wellness_score, sessions, goals = [], goals_achieved, goals_total, avg_focus, tips_sample = [], meta } = req.body
 
   const update = {
@@ -380,6 +389,83 @@ function generateBreakRecommendations(stress, energy, sessionDuration, userPrefe
   return recommendations.slice(0, 5) // Limit to 5 recommendations
 }
 
+function generateSimpleWellnessInsights(entries) {
+  const insights = []
+  
+  if (entries.length === 0) return insights
+  
+  // Calculate averages
+  const avgMood = entries.reduce((sum, e) => sum + e.mood_score, 0) / entries.length
+  const avgStress = entries.reduce((sum, e) => sum + e.stress_level, 0) / entries.length
+  const avgEnergy = entries.reduce((sum, e) => sum + e.energy_level, 0) / entries.length
+  
+  // Mood insights
+  if (avgMood < 4) {
+    insights.push({
+      id: 'low-mood',
+      text: 'Your average mood has been low. Consider activities that boost your spirits.',
+      type: 'mood',
+      priority: 'high'
+    })
+  } else if (avgMood > 7) {
+    insights.push({
+      id: 'high-mood',
+      text: 'Great job maintaining a positive mood! Keep up the good work.',
+      type: 'mood',
+      priority: 'low'
+    })
+  }
+  
+  // Stress insights
+  if (avgStress > 7) {
+    insights.push({
+      id: 'high-stress',
+      text: 'High stress levels detected. Try stress-reduction techniques like deep breathing.',
+      type: 'stress',
+      priority: 'high'
+    })
+  }
+  
+  // Energy insights
+  if (avgEnergy < 5) {
+    insights.push({
+      id: 'low-energy',
+      text: 'Low energy levels may affect your productivity. Focus on sleep and nutrition.',
+      type: 'energy',
+      priority: 'medium'
+    })
+  }
+  
+  // Trend insights
+  if (entries.length >= 3) {
+    const recent = entries.slice(0, 3)
+    const older = entries.slice(3, 6)
+    
+    if (older.length >= 3) {
+      const recentAvg = recent.reduce((sum, e) => sum + e.mood_score, 0) / recent.length
+      const olderAvg = older.reduce((sum, e) => sum + e.mood_score, 0) / older.length
+      
+      if (recentAvg > olderAvg + 1) {
+        insights.push({
+          id: 'improving-mood',
+          text: 'Your mood has been improving! Whatever you\'re doing, keep it up.',
+          type: 'trend',
+          priority: 'low'
+        })
+      } else if (recentAvg < olderAvg - 1) {
+        insights.push({
+          id: 'declining-mood',
+          text: 'Your mood has been declining. Consider what might be causing this.',
+          type: 'trend',
+          priority: 'medium'
+        })
+      }
+    }
+  }
+  
+  return insights.slice(0, 6) // Limit to 6 insights
+}
+
 function calculateCorrelation(x, y) {
   if (x.length !== y.length || x.length === 0) return 0
   
@@ -395,5 +481,233 @@ function calculateCorrelation(x, y) {
   
   return denominator === 0 ? 0 : numerator / denominator
 }
+
+// Get wellness history (last N days)
+router.get('/history', asyncHandler(async (req, res) => {
+  const userId = req.user?.id || '000000000000000000000000' // Default user ID for development
+  const days = parseInt(req.query.days) || 30
+  
+  const startDate = new Date()
+  startDate.setDate(startDate.getDate() - days)
+  
+  const entries = await WellnessEntry.find({
+    user_id: new mongoose.Types.ObjectId(userId),
+    created_at: { $gte: startDate }
+  })
+  .sort({ created_at: -1 })
+  .limit(days)
+  
+  // Transform data for frontend charts
+  const chartData = entries.map((entry, index) => ({
+    day: `Day ${index + 1}`,
+    wellness_score: Math.round(
+      (entry.mood_score * 0.3 + (11 - entry.stress_level) * 0.3 + entry.energy_level * 0.4) * 10
+    ),
+    mood_score: entry.mood_score,
+    stress_level: entry.stress_level,
+    energy_level: entry.energy_level,
+    date: entry.created_at
+  }))
+  
+  res.json({
+    success: true,
+    data: chartData,
+    count: chartData.length,
+    period: `${days} days`
+  })
+}))
+
+// Get wellness insights
+router.get('/insights', asyncHandler(async (req, res) => {
+  const userId = req.user?.id || '000000000000000000000000' // Default user ID for development
+  
+  // Get recent wellness data for insights
+  const recentEntries = await WellnessEntry.find({
+    user_id: new mongoose.Types.ObjectId(userId)
+  })
+  .sort({ created_at: -1 })
+  .limit(20)
+  
+  if (recentEntries.length === 0) {
+    return res.json({
+      success: true,
+      data: [],
+      message: 'No wellness data available for insights'
+    })
+  }
+  
+  // Generate insights based on recent data
+  const insights = generateSimpleWellnessInsights(recentEntries)
+  
+  res.json({
+    success: true,
+    data: insights,
+    count: insights.length,
+    generated_at: new Date().toISOString()
+  })
+}))
+
+// Get mood analytics
+router.get('/mood-analytics', asyncHandler(async (req, res) => {
+  const userId = req.user?.id || '000000000000000000000000' // Default user ID for development
+  const timeRange = req.query.time_range || 'week'
+  
+  let startDate = new Date()
+  switch (timeRange) {
+    case 'week':
+      startDate.setDate(startDate.getDate() - 7)
+      break
+    case 'month':
+      startDate.setMonth(startDate.getMonth() - 1)
+      break
+    case 'year':
+      startDate.setFullYear(startDate.getFullYear() - 1)
+      break
+    default:
+      startDate.setDate(startDate.getDate() - 7)
+  }
+  
+  const entries = await WellnessEntry.find({
+    user_id: new mongoose.Types.ObjectId(userId),
+    created_at: { $gte: startDate }
+  })
+  .sort({ created_at: -1 })
+  
+  if (entries.length === 0) {
+    return res.json({
+      success: true,
+      summary: {
+        avgMood: 5,
+        avgStress: 5,
+        avgEnergy: 5,
+        totalEntries: 0,
+        period: timeRange
+      }
+    })
+  }
+  
+  // Calculate averages
+  const avgMood = Math.round(entries.reduce((sum, e) => sum + e.mood_score, 0) / entries.length)
+  const avgStress = Math.round(entries.reduce((sum, e) => sum + e.stress_level, 0) / entries.length)
+  const avgEnergy = Math.round(entries.reduce((sum, e) => sum + e.energy_level, 0) / entries.length)
+  
+  res.json({
+    success: true,
+    summary: {
+      avgMood,
+      avgStress,
+      avgEnergy,
+      totalEntries: entries.length,
+      period: timeRange,
+      lastUpdated: new Date().toISOString()
+    }
+  })
+}))
+
+// ML-based wellness calculation
+router.post('/calculate-ml', [
+  body('mood').isObject().withMessage('Mood data is required'),
+  body('stress').isObject().withMessage('Stress data is required'),
+  body('energy').isObject().withMessage('Energy data is required')
+], asyncHandler(async (req, res) => {
+  const errors = validationResult(req)
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      message: 'Validation failed',
+      errors: errors.array()
+    })
+  }
+
+  const userId = req.user?.id || '000000000000000000000000' // Default user ID for development
+  const { mood, stress, energy, sleep, activity, nutrition, hydration, screen_time, custom } = req.body
+
+  // Calculate wellness score using ML-like algorithm
+  let wellness_score = 0
+  let confidence = 0.8
+  let model_type = 'rule_based_ml'
+  
+  try {
+    // Base score from mood, stress, and energy
+    const moodScore = (mood.score / 10) * 40 // 40% weight
+    const stressScore = ((11 - stress.level) / 10) * 30 // 30% weight (inverted)
+    const energyScore = (energy.level / 10) * 30 // 30% weight
+    
+    wellness_score = Math.round(moodScore + stressScore + energyScore)
+    
+    // Adjust based on additional factors
+    if (sleep && sleep.hours) {
+      if (sleep.hours >= 7 && sleep.hours <= 9) wellness_score += 5
+      else if (sleep.hours < 6 || sleep.hours > 10) wellness_score -= 5
+    }
+    
+    if (activity && activity.minutes) {
+      if (activity.minutes >= 30) wellness_score += 3
+      else if (activity.minutes < 15) wellness_score -= 3
+    }
+    
+    if (nutrition && nutrition.score) {
+      if (nutrition.score >= 7) wellness_score += 2
+      else if (nutrition.score < 4) wellness_score -= 2
+    }
+    
+    if (hydration && hydration.glasses) {
+      if (hydration.glasses >= 6) wellness_score += 2
+      else if (hydration.glasses < 4) wellness_score -= 2
+    }
+    
+    if (screen_time && screen_time.hours) {
+      if (screen_time.hours > 8) wellness_score -= 3
+      else if (screen_time.hours < 2) wellness_score += 1
+    }
+    
+    // Ensure score is within bounds
+    wellness_score = Math.max(0, Math.min(100, wellness_score))
+    
+    // Generate recommendations
+    const recommendations = []
+    if (wellness_score < 50) {
+      recommendations.push('Consider improving sleep quality and reducing stress')
+      recommendations.push('Increase physical activity and maintain good nutrition')
+    } else if (wellness_score < 70) {
+      recommendations.push('Good progress! Focus on consistent sleep patterns')
+      recommendations.push('Maintain current activity levels and nutrition')
+    } else {
+      recommendations.push('Excellent wellness! Keep up your healthy habits')
+      recommendations.push('Consider sharing your wellness strategies with others')
+    }
+    
+    // Save the entry to database
+    const entry = await WellnessEntry.create({
+      user_id: new mongoose.Types.ObjectId(userId),
+      mood_score: mood.score,
+      stress_level: stress.level,
+      energy_level: energy.level,
+      sleep_hours: sleep?.hours,
+      sleep_quality: sleep?.quality,
+      notes: mood.note || '',
+      mood_tags: mood.tags || [],
+      created_at: new Date()
+    })
+    
+    res.json({
+      success: true,
+      wellness_score,
+      confidence,
+      model_type,
+      recommendations,
+      entry_id: entry.id,
+      message: 'Wellness calculated and recorded successfully'
+    })
+    
+  } catch (error) {
+    console.error('ML wellness calculation error:', error)
+    res.status(500).json({
+      success: false,
+      message: 'Failed to calculate wellness score',
+      error: error.message
+    })
+  }
+}))
 
 export default router

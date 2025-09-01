@@ -21,6 +21,7 @@ if not MINIMAL_BOOT:
     from services.fatigue_service import FatigueDetectionService
     from services.adaptive_learning_service import AdaptiveLearningService
     from services.wellness_service import WellnessService
+    from services.wellness_ml_model import wellness_ml_model
 else:
     # Define lightweight stub services
     class EmotionAnalysisService:

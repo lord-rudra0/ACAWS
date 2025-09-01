@@ -82,7 +82,7 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes)
 app.use('/api/users', authenticateToken, userRoutes)
 app.use('/api/learning', authenticateToken, learningRoutes)
-app.use('/api/wellness', authenticateToken, wellnessRoutes)
+app.use('/api/wellness', wellnessRoutes) // Temporarily removed auth for development
 app.use('/api/analytics', authenticateToken, analyticsRoutes)
 app.use('/api/community', authenticateToken, communityRoutes)
 app.use('/api/admin', authenticateToken, adminRoutes)

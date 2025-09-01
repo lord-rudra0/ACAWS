@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 import numpy as np
 import json
+from services.wellness_ml_model import wellness_ml_model
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ class WellnessService:
         self.mood_concern_threshold = 3  # out of 10
         
     async def track_wellness_metrics(self, user_id: str, metrics: Dict) -> Dict:
-        """Track comprehensive wellness metrics"""
+        """Track comprehensive wellness metrics, supporting dynamic fields"""
         try:
             current_time = datetime.now()
             
@@ -31,17 +32,28 @@ class WellnessService:
             
             profile = self.wellness_profiles[user_id]
             
+            # Add data to ML model for training and analysis
+            wellness_ml_model.add_user_data(user_id, metrics, current_time)
+            
             # Process different metric types
             processed_metrics = {
                 "mood_score": self._process_mood_data(metrics.get("mood", {})),
                 "stress_level": self._process_stress_data(metrics.get("stress", {})),
                 "energy_level": self._process_energy_data(metrics.get("energy", {})),
                 "sleep_quality": self._process_sleep_data(metrics.get("sleep", {})),
-                "physical_activity": self._process_activity_data(metrics.get("activity", {}))
+                "physical_activity": self._process_activity_data(metrics.get("activity", {})),
+                # New dynamic fields
+                "nutrition": metrics.get("nutrition", {}),
+                "hydration": metrics.get("hydration", {}),
+                "screen_time": metrics.get("screen_time", {}),
             }
             
-            # Calculate wellness score
-            wellness_score = self._calculate_wellness_score(processed_metrics)
+            # Store any extra/unknown fields for future ML use
+            extra_fields = {k: v for k, v in metrics.items() if k not in processed_metrics}
+            
+            # Use ML model for wellness score prediction
+            ml_prediction = wellness_ml_model.predict_wellness(user_id, metrics)
+            wellness_score = ml_prediction['wellness_score']
             
             # Update profile
             self._update_wellness_profile(profile, processed_metrics, wellness_score)
@@ -55,9 +67,11 @@ class WellnessService:
             return {
                 "wellness_score": wellness_score,
                 "metrics": processed_metrics,
+                "extra_fields": extra_fields,
                 "recommendations": recommendations,
                 "alerts": alerts,
                 "trends": self._analyze_wellness_trends(profile),
+                "ml_prediction": ml_prediction,  # Include full ML prediction result
                 "timestamp": current_time.isoformat()
             }
             
@@ -134,11 +148,52 @@ class WellnessService:
             logger.error(f"Energy data processing failed: {e}")
             return {"level": 5, "category": "moderate", "optimal_for_learning": True}
     
+    def _analyze_mood_context(self, tags: List[str], note: str) -> Dict:
+        """Analyze mood context from tags and notes"""
+        try:
+            context = {
+                "positive_factors": [],
+                "negative_factors": [],
+                "social_context": False,
+                "work_context": False,
+                "health_context": False
+            }
+            
+            # Analyze tags
+            positive_tags = ["happy", "excited", "motivated", "focused", "energetic", "calm", "relaxed"]
+            negative_tags = ["sad", "angry", "frustrated", "tired", "stressed", "anxious", "depressed"]
+            
+            for tag in tags:
+                if tag.lower() in positive_tags:
+                    context["positive_factors"].append(tag)
+                elif tag.lower() in negative_tags:
+                    context["negative_factors"].append(tag)
+            
+            # Analyze note content
+            note_lower = note.lower()
+            if any(word in note_lower for word in ["friend", "family", "social", "party", "meeting"]):
+                context["social_context"] = True
+            if any(word in note_lower for word in ["work", "job", "project", "deadline", "meeting"]):
+                context["work_context"] = True
+            if any(word in note_lower for word in ["health", "exercise", "sleep", "diet", "meditation"]):
+                context["health_context"] = True
+            
+            return context
+            
+        except Exception as e:
+            logger.error(f"Mood context analysis failed: {e}")
+            return {"positive_factors": [], "negative_factors": [], "social_context": False, "work_context": False, "health_context": False}
+
     def _process_sleep_data(self, sleep_data: Dict) -> Dict:
         """Process sleep quality data"""
         try:
             sleep_hours = sleep_data.get("hours", 7)
-            sleep_quality = sleep_data.get("quality", 7)  # 1-10 scale
+            sleep_quality = sleep_data.get("quality", "good")
+            
+            # Convert quality string to numeric if needed
+            if isinstance(sleep_quality, str):
+                quality_map = {"poor": 3, "fair": 5, "good": 7, "excellent": 9}
+                sleep_quality = quality_map.get(sleep_quality.lower(), 7)
             
             return {
                 "hours": sleep_hours,

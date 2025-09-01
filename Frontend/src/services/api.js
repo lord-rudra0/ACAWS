@@ -322,6 +322,16 @@ export const wellnessAPI = {
     } catch (error) {
       throw new Error(error.message || 'Failed to save daily wellness summary')
     }
+  },
+
+  // ML-based wellness calculation
+  calculateML: async (entryData = {}) => {
+    try {
+      const response = await expressAPI.post('/api/wellness/calculate-ml', entryData)
+      return response.data
+    } catch (error) {
+      throw new Error(error.message || 'Failed to calculate ML wellness')
+    }
   }
 }
 

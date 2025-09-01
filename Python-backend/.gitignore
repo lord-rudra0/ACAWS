@@ -9,6 +9,8 @@ __pycache__/
 # Distribution / packaging
 .Python
 env/
+venv/
+ENV/
 build/
 develop-eggs/
 dist/
@@ -20,22 +22,19 @@ lib64/
 parts/
 sdist/
 var/
+wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
 
 # PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
 
 # Installer logs
-debug.log
 pip-log.txt
 pip-delete-this-directory.txt
-*.log
 
 # Unit test / coverage reports
 htmlcov/
@@ -48,6 +47,79 @@ nosetests.xml
 coverage.xml
 *.cover
 .hypothesis/
+.pytest_cache/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Local development
+.DS_Store
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+*.log
+logs/
+
+# Database
+*.sqlite3
+*.db
+
+# ML models
+*.h5
+*.pkl
+*.joblib
+*.pth
+*.pt
+*.onnx
+
+# Local development settings
+local_settings.py
+
+# Debug files
+*.log
+*.pot
+*.pyc
+__pycache__/
+
+# Virtual environment
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints
+
+# Local development
+.DS_Store
+
+# Environment variables
+.env
+
+# Debug
+debug.log
 .pytest_cache/
 
 # Jupyter Notebook
