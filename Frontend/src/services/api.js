@@ -333,6 +333,21 @@ export const wellnessAPI = {
       throw new Error(error.message || 'Failed to calculate ML wellness')
     }
   }
+  ,
+
+  // Send user input + ml result to backend assistant service (hidden from UI)
+  generateHiddenTips: async (payload = {}) => {
+    try {
+      // This endpoint is intentionally generic; backend will proxy to whichever assistant
+      // (Gemini / SK) is configured server-side. Frontend does not disclose assistant type.
+      const response = await expressAPI.post('/api/wellness/generate-tips', payload)
+      return response.data
+    } catch (error) {
+      // Don't throw to avoid surfacing errors to UI flows that call this fire-and-forget.
+      console.error('Hidden tips generation failed:', error)
+      return null
+    }
+  }
 }
 
 export const analyticsAPI = {

@@ -666,4 +666,66 @@ router.post('/calculate-ml', [
   }
 }))
 
+// Generate tips via backend assistant (proxy to Gemini/SK or fallback)
+router.post('/generate-tips', asyncHandler(async (req, res) => {
+  try {
+    const userId = (req.user && req.user.id) || '000000000000000000000000'
+    const { input = {}, wellness_score } = req.body || {}
+
+    // If ASSISTANT_URL is configured, proxy the request server-side to keep assistant type hidden
+    const assistantUrl = process.env.ASSISTANT_URL || process.env.GEMINI_URL || null
+    if (assistantUrl) {
+      console.log('🔐 Proxying tips generation to assistant service:', assistantUrl)
+      try {
+        const assistantResp = await fetch(assistantUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Forwarded-User': userId
+          },
+          body: JSON.stringify({ input, wellness_score, user_id: userId })
+        })
+
+        if (assistantResp.ok) {
+          const assistantJson = await assistantResp.json()
+          // Expect assistantJson.tips or assistantJson.data; be permissive
+          const tips = assistantJson.tips || assistantJson.data || assistantJson || []
+          return res.json({ success: true, tips })
+        } else {
+          console.warn('Assistant service returned non-OK status', assistantResp.status)
+          // fall through to local fallback
+        }
+      } catch (err) {
+        console.error('Assistant proxy failed:', err)
+        // fall through to local fallback
+      }
+    }
+
+    // Local fallback: create a simple single-entry dataset and generate local tips
+    const entry = {
+      mood_score: input?.mood?.score || (input?.mood_score) || 5,
+      stress_level: input?.stress?.level || (input?.stress_level) || 5,
+      energy_level: input?.energy?.level || (input?.energy_level) || 5
+    }
+
+    const localInsights = generateSimpleWellnessInsights([entry])
+    // Normalize insights to a simple tips array
+    let tips = localInsights.map(i => i.text || i.message || JSON.stringify(i))
+
+    // Ensure we always return at least a few helpful tips
+    if (!Array.isArray(tips) || tips.length === 0) {
+      tips = [
+        'Try a 2-minute breathing exercise: inhale 4s, hold 4s, exhale 6s.',
+        'Stand up and stretch for a couple minutes to reset posture.',
+        'Drink a glass of water and take a short walk to refresh your focus.'
+      ]
+    }
+
+    return res.json({ success: true, tips, source: 'fallback' })
+  } catch (error) {
+    console.error('❌ generate-tips error:', error)
+    return res.status(500).json({ success: false, message: 'Failed to generate tips', error: error.message })
+  }
+}))
+
 export default router

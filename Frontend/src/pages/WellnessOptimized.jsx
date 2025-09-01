@@ -282,24 +282,53 @@ const WellnessOptimized = () => {
           <p className="mt-2 text-gray-600 dark:text-gray-400">
             Track your wellness, take breaks, and maintain a healthy balance
           </p>
+          {/* DEBUG BANNER - remove when confirmed */}
+          <div className="mt-3">
+            <span className="inline-block px-2 py-1 text-xs font-semibold bg-green-100 text-green-800 rounded">
+              DEBUG: Rendering WellnessOptimized.jsx
+            </span>
+          </div>
         </div>
 
         {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Left Column */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Wellness Score Card */}
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Your Wellness Score
-              </h3>
-              <div className="text-center">
-                <div className="text-6xl font-bold text-primary-600 dark:text-primary-400 mb-2">
-                  {displayWellnessScore}
+            {/* Row: Wellness Score + Trends */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Wellness Score Card */}
+              <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                  Your Wellness Score
+                </h3>
+                <div className="text-center">
+                  <div className="text-6xl font-bold text-primary-600 dark:text-primary-400 mb-2">
+                    {displayWellnessScore}
+                  </div>
+                  <p className="text-gray-600 dark:text-gray-400">
+                    {displayWellnessScore === '—' ? 'No data yet' : 'Current wellness level'}
+                  </p>
                 </div>
-                <p className="text-gray-600 dark:text-gray-400">
-                  {displayWellnessScore === '—' ? 'No data yet' : 'Current wellness level'}
-                </p>
+              </div>
+
+              {/* Wellness Chart (moved next to score) */}
+              <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                  Wellness Trends
+                </h3>
+                <div className="h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="day" />
+                      <YAxis />
+                      <Tooltip />
+                      <Line type="monotone" dataKey="score" stroke="#8884d8" strokeWidth={2} />
+                      <Line type="monotone" dataKey="mood" stroke="#82ca9d" strokeWidth={2} />
+                      <Line type="monotone" dataKey="stress" stroke="#ffc658" strokeWidth={2} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
             </div>
 
@@ -495,95 +524,7 @@ const WellnessOptimized = () => {
               )}
             </div>
 
-            {/* Wellness Chart */}
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Wellness Trends
-              </h3>
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="day" />
-                    <YAxis />
-                    <Tooltip />
-                    <Line type="monotone" dataKey="score" stroke="#8884d8" strokeWidth={2} />
-                    <Line type="monotone" dataKey="mood" stroke="#82ca9d" strokeWidth={2} />
-                    <Line type="monotone" dataKey="stress" stroke="#ffc658" strokeWidth={2} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            {/* Break Timer */}
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Break Timer
-              </h3>
-              <div className="text-center mb-4">
-                <div className="text-4xl font-bold text-primary-600 dark:text-primary-400 mb-2">
-                  {Math.floor(breakTimer / 60)}:{(breakTimer % 60).toString().padStart(2, '0')}
-                </div>
-                <p className="text-gray-600 dark:text-gray-400">
-                  {isBreakActive ? 'Break in progress' : 'Ready for a break?'}
-                </p>
-              </div>
-
-              <div className="flex space-x-2">
-                <button
-                  onClick={handleToggleBreak}
-                  className="flex-1 btn-primary flex items-center justify-center space-x-2"
-                >
-                  {isBreakActive ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-                  <span>{isBreakActive ? 'Pause' : 'Start'}</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setIsBreakActive(false)
-                    setBreakTimer(0)
-                    setBreakStartTime(null)
-                  }}
-                  className="p-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors"
-                >
-                  <RotateCcw className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            {/* Wellness Activities */}
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Wellness Activities
-              </h3>
-              
-              <div className="space-y-3">
-                {wellnessActivities.map((activity, index) => {
-                  const Icon = activity.icon
-                  return (
-                    <button
-                      key={index}
-                      onClick={activity.action}
-                      className="w-full flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-700 rounded-xl hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-all duration-300 group"
-                    >
-                      <div className="w-10 h-10 bg-primary-100 dark:bg-primary-900/30 rounded-lg flex items-center justify-center group-hover:bg-primary-200 dark:group-hover:bg-primary-800/50 transition-colors">
-                        <Icon className="w-5 h-5 text-primary-600 dark:text-primary-400" />
-                      </div>
-                      <div className="flex-1 text-left">
-                        <div className="font-medium text-gray-900 dark:text-white">
-                          {activity.title}
-                        </div>
-                        <div className="text-sm text-gray-600 dark:text-gray-400">
-                          {activity.description}
-                        </div>
-                      </div>
-                      <div className="text-sm text-gray-500 dark:text-gray-400">
-                        {activity.duration}
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
+            {/* (Trends and Break Timer removed from here; kept in the header row and sidebar) */}
 
             {/* Daily Goals */}
             <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
@@ -641,6 +582,77 @@ const WellnessOptimized = () => {
                   </div>
                   <span className="font-semibold text-gray-900 dark:text-white">—</span>
                 </div>
+              </div>
+            </div>
+
+            {/* Break Timer (moved to right sidebar) */}
+            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                Break Timer
+              </h3>
+              <div className="text-center mb-4">
+                <div className="text-4xl font-bold text-primary-600 dark:text-primary-400 mb-2">
+                  {Math.floor(breakTimer / 60)}:{(breakTimer % 60).toString().padStart(2, '0')}
+                </div>
+                <p className="text-gray-600 dark:text-gray-400">
+                  {isBreakActive ? 'Break in progress' : 'Ready for a break?'}
+                </p>
+              </div>
+
+              <div className="flex space-x-2">
+                <button
+                  onClick={handleToggleBreak}
+                  className="flex-1 btn-primary flex items-center justify-center space-x-2"
+                >
+                  {isBreakActive ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                  <span>{isBreakActive ? 'Pause' : 'Start'}</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setIsBreakActive(false)
+                    setBreakTimer(0)
+                    setBreakStartTime(null)
+                  }}
+                  className="p-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+              </div>
+
+            </div>
+
+            {/* Wellness Activities (moved from main column) */}
+            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                Wellness Activities
+              </h3>
+              
+              <div className="space-y-3">
+                {wellnessActivities.map((activity, index) => {
+                  const Icon = activity.icon
+                  return (
+                    <button
+                      key={index}
+                      onClick={activity.action}
+                      className="w-full flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-700 rounded-xl hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-all duration-300 group"
+                    >
+                      <div className="w-10 h-10 bg-primary-100 dark:bg-primary-900/30 rounded-lg flex items-center justify-center group-hover:bg-primary-200 dark:group-hover:bg-primary-800/50 transition-colors">
+                        <Icon className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+                      </div>
+                      <div className="flex-1 text-left">
+                        <div className="font-medium text-gray-900 dark:text-white">
+                          {activity.title}
+                        </div>
+                        <div className="text-sm text-gray-600 dark:text-gray-400">
+                          {activity.description}
+                        </div>
+                      </div>
+                      <div className="text-sm text-gray-500 dark:text-gray-400">
+                        {activity.duration}
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
             </div>
 

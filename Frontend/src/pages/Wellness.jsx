@@ -72,6 +72,21 @@ const Wellness = () => {
   const [inputLoading, setInputLoading] = useState(false)
   const [inputError, setInputError] = useState(null)
 
+  // Small client-side fallback tips shown when backend/assistant returns none
+  const FALLBACK_TIPS = [
+    'Take 3 deep breaths right now — slow inhale, hold, slow exhale.',
+    'Stand up and stretch for 2 minutes to relieve tension.',
+    'Drink a glass of water and take a short walk to reset focus.'
+  ]
+
+  // Helper to ensure a visible loader for at least `minMs` milliseconds
+  const ensureMinDelay = async (startTime, minMs = 500) => {
+    const elapsed = Date.now() - startTime
+    if (elapsed < minMs) {
+      await new Promise(r => setTimeout(r, minMs - elapsed))
+    }
+  }
+
   // Memoized values for performance
   const moods = useMemo(() => [
     { icon: Smile, label: 'Great', value: 5, color: 'text-green-500' },
@@ -216,9 +231,76 @@ const Wellness = () => {
         data.custom = inputForm.custom
       }
 
+      // --- NEW: call ML and immediately update local history + fetch tips with loader ---
       const result = await wellnessAPI.calculateML(data)
       setInputResult(result)
       setMlWellnessScore(Math.round(result.wellness_score))
+
+      try {
+        const newEntry = {
+          id: result.entry_id || null,
+          wellness_score: result.wellness_score,
+          mood_score: data.mood.score,
+          stress_level: data.stress.level,
+          energy_level: data.energy.level,
+          created_at: new Date().toISOString()
+        }
+
+        setWellnessData(prev => {
+          const arr = Array.isArray(prev) ? [...prev] : []
+          arr.push(newEntry)
+          while (arr.length > 7) arr.shift()
+          return arr
+        })
+
+        // Best-effort: if backend did not create an entry, record it
+        if (!result.entry_id) {
+          wellnessAPI.recordEntry({
+            mood_score: data.mood.score,
+            stress_level: data.stress.level,
+            energy_level: data.energy.level,
+            sleep_hours: data.sleep?.hours || null,
+            sleep_quality: data.sleep?.quality || null,
+            notes: data.mood.note || '',
+            mood_tags: data.mood.tags || []
+          }).catch(err => console.debug('recordEntry fallback failed', err))
+        }
+      } catch (e) {
+        console.debug('Failed to update local wellness history:', e)
+      }
+
+      // Fetch tips and show loader in the Tips card. Keep loader visible
+      // for a short minimum so users can perceive activity.
+      setAiTips([])
+      setTipsLoading(true)
+      setTipsError(null)
+      const tipsStart = Date.now()
+      try {
+        const tipsResp = await wellnessAPI.generateHiddenTips({ input: data, wellness_score: result.wellness_score })
+        // Normalize returned shape
+        const returned = tipsResp || {}
+        const returnedTips = Array.isArray(returned.tips)
+          ? returned.tips
+          : Array.isArray(returned.data)
+            ? returned.data
+            : Array.isArray(returned) ? returned : []
+
+        if (returnedTips.length > 0) {
+          setAiTips(returnedTips)
+        } else {
+          // Use safe client-side fallback tips so UI isn't empty
+          setAiTips(FALLBACK_TIPS)
+        }
+      } catch (e) {
+        console.debug('Hidden tips call failed (ignored)', e)
+        setTipsError('Failed to load tips')
+        setAiTips(FALLBACK_TIPS)
+      } finally {
+        await ensureMinDelay(tipsStart, 500)
+        setTipsLoading(false)
+      }
+
+      // Reset form
       setInputForm({
         mood: { score: '', tags: '', note: '' },
         stress: { level: 5 },
@@ -230,6 +312,8 @@ const Wellness = () => {
         screen_time: { hours: 4 },
         custom: ''
       })
+      // --- END NEW ---
+
     } catch (err) {
       setInputError(err?.message || 'Failed to calculate wellness')
     } finally {
@@ -285,23 +369,44 @@ const Wellness = () => {
   // Fetch wellness analytics on mount
   useEffect(() => {
     const fetchWellness = async () => {
+      setTipsLoading(true)
+      const start = Date.now()
       try {
         const [history, insights, moodData] = await Promise.all([
           wellnessAPI.getHistory(7).catch(() => null), // Get last 7 days instead of getAnalytics
           wellnessAPI.getInsights().catch(() => null),
           wellnessAPI.getMoodAnalytics('week').catch(() => null)
         ])
-        
+
+        console.debug('fetchWellness: history=', history)
+        console.debug('fetchWellness: insights raw=', insights)
+        console.debug('fetchWellness: moodData=', moodData)
+
         // Ensure we always set arrays, even if API returns null/undefined
-        setWellnessData(Array.isArray(history?.data) ? history.data : Array.isArray(history) ? history : [])
-        setAiTips(Array.isArray(insights?.data) ? insights.data : Array.isArray(insights) ? insights : [])
+        setWellnessData(Array.isArray(history?.history) ? history.history : Array.isArray(history?.data) ? history.data : Array.isArray(history) ? history : [])
+
+        // Normalize insights response robustly
+        let normalizedTips = []
+        if (!insights) normalizedTips = []
+        else if (Array.isArray(insights)) normalizedTips = insights
+        else if (insights?.success && Array.isArray(insights.insights)) normalizedTips = insights.insights
+        else if (Array.isArray(insights?.tips)) normalizedTips = insights.tips
+        else if (Array.isArray(insights?.data)) normalizedTips = insights.data
+        else if (Array.isArray(insights?.insights)) normalizedTips = insights.insights
+        else normalizedTips = []
+
+        console.debug('fetchWellness: normalizedTips=', normalizedTips)
+        setAiTips(normalizedTips.length > 0 ? normalizedTips : FALLBACK_TIPS)
         setSummary(moodData?.summary || {})
       } catch (error) {
         console.error('Failed to fetch wellness data:', error)
         // Set empty arrays on error to prevent crashes
         setWellnessData([])
-        setAiTips([])
+        setAiTips(FALLBACK_TIPS)
         setSummary({})
+      } finally {
+        await ensureMinDelay(start, 400)
+        setTipsLoading(false)
       }
     }
     
@@ -325,24 +430,53 @@ const Wellness = () => {
           <p className="mt-2 text-gray-600 dark:text-gray-400">
             Track your wellness, take breaks, and maintain a healthy balance
           </p>
+          {/* DEBUG BANNER - remove when confirmed */}
+          <div className="mt-3">
+            <span className="inline-block px-2 py-1 text-xs font-semibold bg-red-100 text-red-800 rounded">
+              DEBUG: Rendering Wellness.jsx
+            </span>
+          </div>
         </div>
 
         {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Left Column */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Wellness Score Card */}
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Your Wellness Score
-              </h3>
-              <div className="text-center">
-                <div className="text-6xl font-bold text-primary-600 dark:text-primary-400 mb-2">
-                  {displayWellnessScore}
+            {/* Row: Wellness Score + Trends */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Wellness Score Card */}
+              <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                  Your Wellness Score
+                </h3>
+                <div className="text-center">
+                  <div className="text-5xl font-bold text-primary-600 dark:text-primary-400 mb-2">
+                    {displayWellnessScore}
+                  </div>
+                  <p className="text-gray-600 dark:text-gray-400 text-sm">
+                    {displayWellnessScore === '—' ? 'No data yet' : 'Current wellness level'}
+                  </p>
                 </div>
-                <p className="text-gray-600 dark:text-gray-400">
-                  {displayWellnessScore === '—' ? 'No data yet' : 'Current wellness level'}
-                </p>
+              </div>
+
+              {/* Wellness Chart (moved next to score) */}
+              <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                  Wellness Trends
+                </h3>
+                <div className="h-48">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="day" />
+                      <YAxis />
+                      <Tooltip />
+                      <Line type="monotone" dataKey="score" stroke="#8884d8" strokeWidth={2} />
+                      <Line type="monotone" dataKey="mood" stroke="#82ca9d" strokeWidth={2} />
+                      <Line type="monotone" dataKey="stress" stroke="#ffc658" strokeWidth={2} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
             </div>
 
@@ -551,104 +685,7 @@ const Wellness = () => {
               )}
             </div>
 
-            {/* Wellness Chart */}
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Wellness Trends
-              </h3>
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="day" />
-                    <YAxis />
-                    <Tooltip />
-                    <Line type="monotone" dataKey="score" stroke="#8884d8" strokeWidth={2} />
-                    <Line type="monotone" dataKey="mood" stroke="#82ca9d" strokeWidth={2} />
-                    <Line type="monotone" dataKey="stress" stroke="#ffc658" strokeWidth={2} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            {/* Break Timer */}
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Break Timer
-              </h3>
-              <div className="text-center mb-4">
-                <div className="text-4xl font-bold text-primary-600 dark:text-primary-400 mb-2">
-                  {Math.floor(breakTimer / 60)}:{(breakTimer % 60).toString().padStart(2, '0')}
-                </div>
-                <p className="text-gray-600 dark:text-gray-400">
-                  {isBreakActive ? 'Break in progress' : 'Ready for a break?'}
-                </p>
-              </div>
-
-              <div className="flex justify-center space-x-4">
-                <button
-                  onClick={handleToggleBreak}
-                  className={`px-6 py-2 rounded-lg font-medium transition-colors ${
-                    isBreakActive
-                      ? 'bg-red-500 hover:bg-red-600 text-white'
-                      : 'bg-green-500 hover:bg-green-600 text-white'
-                  }`}
-                >
-                  {isBreakActive ? (
-                    <>
-                      <Pause className="w-4 h-4 inline mr-2" />
-                      End Break
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-4 h-4 inline mr-2" />
-                      Start Break
-                    </>
-                  )}
-                </button>
-                <button
-                  onClick={() => setBreakTimer(0)}
-                  className="px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded-lg transition-colors"
-                >
-                  <RotateCcw className="w-4 h-4 inline mr-2" />
-                  Reset
-                </button>
-              </div>
-            </div>
-
-            {/* Wellness Activities */}
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Wellness Activities
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {wellnessActivities.map((activity, index) => {
-                  const Icon = activity.icon
-                  return (
-                    <button
-                      key={index}
-                      onClick={activity.action}
-                      className="p-4 border border-gray-200 dark:border-gray-700 rounded-xl hover:border-primary-300 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-all duration-200 text-left"
-                    >
-                      <div className="flex items-center space-x-3">
-                        <Icon className="w-6 h-6 text-primary-500" />
-                        <div>
-                          <h4 className="font-medium text-gray-900 dark:text-white">
-                          {activity.title}
-                          </h4>
-                          <p className="text-sm text-gray-600 dark:text-gray-400">
-                          {activity.description}
-                          </p>
-                          <span className="text-xs text-primary-600 dark:text-primary-400 font-medium">
-                            {activity.duration}
-                          </span>
-                        </div>
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
+            {/* (Trends and Break Timer removed from this column; kept in header row and sidebar) */}
 
             {/* Daily Goals */}
             <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
@@ -710,37 +747,106 @@ const Wellness = () => {
               )}
             </div>
 
-            {/* Wellness Tips */}
+            {/* Wellness Tips (moved between Today's Summary and Wellness Activities) */}
             <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
                 Wellness Tips
               </h3>
+              <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">
+                Status: {tipsLoading ? 'loading' : aiTips.length ? 'loaded' : 'idle'} • {aiTips.length} tip(s)
+              </div>
+
               {tipsLoading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3].map((i) => (
-                    <div key={i} className="h-4 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
-                  ))}
+                <div className="space-y-3 text-center">
+                  <div className="text-sm text-gray-500 dark:text-gray-400">Loading tips...</div>
+                  {[1,2,3].map(i => <div key={i} className="h-4 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />)}
                 </div>
               ) : tipsError ? (
-                <div className="text-red-500 dark:text-red-400 text-sm">
-                  {tipsError}
-                </div>
+                <div className="text-red-500 dark:text-red-400 text-sm">{tipsError}</div>
               ) : aiTips.length > 0 ? (
                 <div className="space-y-3">
-                  {aiTips.slice(0, 3).map((tip, index) => (
-                    <div key={index} className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-700">
-                      <p className="text-sm text-blue-800 dark:text-blue-200">
-                        {tip.text || tip}
-                      </p>
+                  {aiTips.slice(0,3).map((tip, index) => (
+                    <div key={index} className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-100 dark:border-gray-700 text-sm text-gray-700 dark:text-gray-300">
+                      {tip.text || tip}
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="text-gray-500 dark:text-gray-400 text-center py-4">
-                  No tips available
-                </div>
+                <div className="text-gray-500 dark:text-gray-400 text-center py-4">No tips available</div>
               )}
             </div>
+
+            {/* Wellness Activities (moved from main column) */}
+            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                Wellness Activities
+              </h3>
+              <div className="space-y-3">
+                {wellnessActivities.map((activity, index) => {
+                  const Icon = activity.icon
+                  return (
+                    <button
+                      key={index}
+                      onClick={activity.action}
+                      className="w-full flex items-center space-x-3 p-4 bg-gray-50 dark:bg-gray-700 rounded-xl hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-all duration-300 group"
+                    >
+                      <div className="w-10 h-10 bg-primary-100 dark:bg-primary-900/30 rounded-lg flex items-center justify-center group-hover:bg-primary-200 dark:group-hover:bg-primary-800/50 transition-colors">
+                        <Icon className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+                      </div>
+                      <div className="flex-1 text-left">
+                        <div className="font-medium text-gray-900 dark:text-white">
+                          {activity.title}
+                        </div>
+                        <div className="text-sm text-gray-600 dark:text-gray-400">
+                          {activity.description}
+                        </div>
+                      </div>
+                      <div className="text-sm text-gray-500 dark:text-gray-400">
+                        {activity.duration}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Break Timer (moved to right sidebar) */}
+            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-lg">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                Break Timer
+              </h3>
+              <div className="text-center mb-4">
+                <div className="text-4xl font-bold text-primary-600 dark:text-primary-400 mb-2">
+                  {Math.floor(breakTimer / 60)}:{(breakTimer % 60).toString().padStart(2, '0')}
+                </div>
+                <p className="text-gray-600 dark:text-gray-400">
+                  {isBreakActive ? 'Break in progress' : 'Ready for a break?'}
+                </p>
+              </div>
+
+              <div className="flex space-x-2">
+                <button
+                  onClick={handleToggleBreak}
+                  className="flex-1 btn-primary flex items-center justify-center space-x-2"
+                >
+                  {isBreakActive ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                  <span>{isBreakActive ? 'Pause' : 'Start'}</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setIsBreakActive(false)
+                    setBreakTimer(0)
+                    setBreakStartTime(null)
+                  }}
+                  className="p-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+
+            {/* (Duplicate Wellness Tips removed — single Tips card above is used) */}
           </div>
         </div>
       </div>
