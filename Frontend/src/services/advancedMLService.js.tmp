@@ -1,0 +1,63 @@
+// Advanced ML service (clean rewrite)
+// Prefers Python backend endpoints for heavy inference, falls back to light mocks when backend unavailable
+
+const ENV = typeof import.meta !== 'undefined' ? (import.meta.env || {}) : {}
+const USE_PROXY = String(ENV.VITE_USE_PY_PROXY || '').toLowerCase() === 'true'
+const EXPRESS_API = ENV.VITE_API_URL
+const DIRECT_PY = ENV.VITE_PYTHON_API_URL || ENV.VITE_PY_BACKEND_URL || 'http://localhost:5000'
+const PY_BASE = USE_PROXY && EXPRESS_API ? `${EXPRESS_API}/api/python` : DIRECT_PY
+const DEBUG = String(ENV.VITE_DEBUG_ADV_ML || '').toLowerCase() === 'true'
+
+function dbg(...args) { try { if (DEBUG) console.debug('[AdvancedML]', ...args) } catch {} }
+function pyEndpoint(path) { const base = PY_BASE; return USE_PROXY ? `${base}${path}` : `${base}/api${path}` }
+function getAuthHeader() { try { const t = localStorage.getItem('token') || localStorage.getItem('auth_token'); if (!t) return {}; return USE_PROXY ? { 'x-auth-token': t } : { Authorization: `Bearer ${t}` } } catch { return {} } }
+
+class AdvancedMLService {
+  constructor() { this.isInitialized = false; this.initializationPromise = null }
+  async initialize() { if (this.isInitialized) return; if (this.initializationPromise) return this.initializationPromise; this.initializationPromise = this._performInitialization(); await this.initializationPromise }
+  async _performInitialization() { dbg('init', { USE_PROXY, PY_BASE }); await new Promise(r => setTimeout(r, 20)); this.isInitialized = true }
+  _isOnDeviceOnly() { try { return JSON.parse(localStorage.getItem('el:onDeviceOnly')) ?? false } catch { return false } }
+
+  async analyzeEmotionAdvanced(imageSrc) {
+    if (!this._isOnDeviceOnly()) {
+      try {
+        const res = await fetch(pyEndpoint('/vision/emotion'), { method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeader() }, body: JSON.stringify({ image: imageSrc }) })
+        if (res.ok) { const j = await res.json(); return { emotion: j.emotion || j.label || null, emotions: j.emotions || j.scores || null, confidence: j.confidence ?? j.confidenceScore ?? 0, timestamp: j.timestamp || new Date().toISOString(), source: 'python_backend', raw: j } }
+      } catch (e) { console.error('emotion backend failed', e) }
+    }
+    const list = ['happy','sad','angry','surprised','neutral']; const pick = list[Math.floor(Math.random()*list.length)]; return { emotion: pick, confidence: 0.7 + Math.random()*0.3, timestamp: new Date().toISOString(), source: 'mock' }
+  }
+
+  async analyzeAttentionAdvanced(imageSrc, options={}) {
+    if (!this._isOnDeviceOnly()) {
+      try { const res = await fetch(pyEndpoint('/vision/attention'), { method:'POST', headers:{ 'Content-Type':'application/json', ...getAuthHeader() }, body: JSON.stringify({ image: imageSrc, options }) }); if (res.ok) { const j = await res.json(); return { attentionScore: j.attentionScore ?? j.score ?? null, gazeAnalysis: j.gazeAnalysis||{}, cognitiveLoad: j.cognitiveLoad ?? null, timestamp: j.timestamp||new Date().toISOString(), source:'python_backend', raw:j } } } catch(e){ console.error('attention backend failed', e) }
+    }
+    return { attentionScore: 0.6 + Math.random()*0.4, gazeAnalysis: { confidence: 0.6, focusArea: 'center' }, cognitiveLoad: Math.random(), timestamp: new Date().toISOString(), source: 'mock' }
+  }
+
+  async detectFatigueAdvanced(imageSrc) {
+    if (!this._isOnDeviceOnly()) {
+      try { const res = await fetch(pyEndpoint('/vision/fatigue'), { method:'POST', headers:{ 'Content-Type':'application/json', ...getAuthHeader() }, body: JSON.stringify({ image: imageSrc }) }); if (res.ok) { const j = await res.json(); return { fatigueLevel: j.fatigueLevel ?? null, eyeOpenness: j.eyeOpenness ?? null, blinkRate: j.blinkRate ?? null, timestamp: j.timestamp||new Date().toISOString(), source:'python_backend', raw:j } } } catch(e){ console.error('fatigue backend failed', e) }
+    }
+    return { fatigueLevel: Math.random()*0.8, eyeOpenness: 0.4 + Math.random()*0.6, blinkRate: 14 + Math.random()*6, timestamp: new Date().toISOString(), source: 'mock' }
+  }
+
+  async adaptLearningContent(userProfile, performanceData) {
+    if (!this._isOnDeviceOnly()) {
+      try { const res = await fetch(pyEndpoint('/adaptation/content'), { method:'POST', headers:{ 'Content-Type':'application/json', ...getAuthHeader() }, body: JSON.stringify({ user: userProfile, performance: performanceData }) }); if (res.ok) { const j = await res.json(); return { recommendedDifficulty: j.recommendedDifficulty ?? j.difficulty ?? null, contentType: j.contentType || 'interactive', duration: j.duration || 15, source:'python_backend', raw:j } } } catch(e){ console.error('adapt backend failed', e) }
+    }
+    const difficulty = Math.max(1, Math.min(10, 5 + (Math.random()-0.5)*4)); return { recommendedDifficulty: Math.round(difficulty), contentType: ['video','interactive','text'][Math.floor(Math.random()*3)], duration: 15+Math.floor(Math.random()*30), source:'mock' }
+  }
+
+  async analyzeCognitiveState(emotionData, attentionData, fatigueData) {
+    if (!this._isOnDeviceOnly()) {
+      try { const res = await fetch(pyEndpoint('/cognitive/analyze'), { method:'POST', headers:{ 'Content-Type':'application/json', ...getAuthHeader() }, body: JSON.stringify({ emotion: emotionData, attention: attentionData, fatigue: fatigueData }) }); if (res.ok) { const j = await res.json(); return { cognitiveLoad: j.cognitiveLoad ?? null, emotionalStability: j.emotionalStability ?? null, focusLevel: j.focusLevel ?? null, overallState: j.overallState ?? this._calculateOverallState(j.cognitiveLoad||0, j.emotionalStability||0, j.focusLevel||0), timestamp: j.timestamp||new Date().toISOString(), source:'python_backend', raw:j } } } catch(e){ console.error('cognitive backend failed', e) }
+    }
+    const cognitiveLoad = (attentionData?.cognitiveLoad||0.5) + Math.random()*0.3; const emotionalStability = 0.6 + Math.random()*0.4; const focusLevel = (attentionData?.attentionScore||0.5) + Math.random()*0.3; return { cognitiveLoad: Math.min(1,Math.max(0,cognitiveLoad)), emotionalStability: Math.min(1,Math.max(0,emotionalStability)), focusLevel: Math.min(1,Math.max(0,focusLevel)), overallState: this._calculateOverallState(cognitiveLoad, emotionalStability, focusLevel), timestamp: new Date().toISOString(), source: 'mock' }
+}
+
+_calculateOverallState(cognitiveLoad, emotionalStability, focusLevel) { const avg = (cognitiveLoad + emotionalStability + focusLevel)/3; if (avg>=0.8) return 'excellent'; if (avg>=0.6) return 'good'; if (avg>=0.4) return 'fair'; return 'poor' }
+dispose() { this.isInitialized = false; this.initializationPromise = null }
+
+const advancedMLService = new AdvancedMLService()
+export default advancedMLService

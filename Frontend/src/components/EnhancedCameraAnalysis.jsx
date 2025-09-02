@@ -11,10 +11,12 @@ const EnhancedCameraAnalysis = ({
   isActive = false, 
   onError,
   onAdvancedInsights,
-  userProfile = {}
+  userProfile = {},
+  onDeviceOnly = true
 }) => {
   const webcamRef = useRef(null)
   const canvasRef = useRef(null)
+  const videoStreamRef = useRef(null)
   const [analysisData, setAnalysisData] = useState({
     emotion: null,
     attention: null,
@@ -39,6 +41,7 @@ const EnhancedCameraAnalysis = ({
     attentionConsistency: 0
   })
   const [realTimeInsights, setRealTimeInsights] = useState([])
+  const [consentGiven, setConsentGiven] = useState(false)
   const { error, handleAsync, clearError } = useErrorHandler()
 
   const analysisModes = [
@@ -53,6 +56,42 @@ const EnhancedCameraAnalysis = ({
     }
   }, [isActive, analysisMode])
 
+  // Attach real camera when consent given
+  useEffect(() => {
+    let mounted = true
+    const startCamera = async () => {
+      if (!consentGiven) return
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setCameraError('Camera API not available in this browser')
+        return
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false })
+        videoStreamRef.current = stream
+        if (webcamRef.current) {
+          // create a hidden video element if not present
+          webcamRef.current.srcObject = stream
+          webcamRef.current.play?.()
+        }
+      } catch (err) {
+        handleCameraError(err)
+      }
+    }
+
+    if (isActive && consentGiven) startCamera()
+
+    return () => {
+      mounted = false
+      try {
+        if (videoStreamRef.current) {
+          videoStreamRef.current.getTracks().forEach(t => t.stop())
+          videoStreamRef.current = null
+        }
+      } catch (e) {}
+    }
+  }, [consentGiven, isActive])
+
   const initializeAdvancedAnalysis = async () => {
     try {
       await advancedMLService.initialize()
@@ -65,20 +104,42 @@ const EnhancedCameraAnalysis = ({
 
   const captureAndAnalyzeAdvanced = useCallback(async () => {
     if (!isActive || isAnalyzing) return
-
     try {
-      // Mock image capture for development (no webcam)
-      const mockImageSrc = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQwIiBoZWlnaHQ9IjQ4MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIyNCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+TW9jayBDYW1lcmEgSW1hZ2U8L3RleHQ+PC9zdmc+'
-      
+      // Capture image frame from video if available, else fallback to mock
+      let imageSrc = null
+      if (webcamRef.current && webcamRef.current.srcObject) {
+        // draw current video frame to canvas and get data URL
+        try {
+          const v = webcamRef.current
+          const c = document.createElement('canvas')
+          c.width = v.videoWidth || 640
+          c.height = v.videoHeight || 480
+          const ctx = c.getContext('2d')
+          ctx.drawImage(v, 0, 0, c.width, c.height)
+          imageSrc = c.toDataURL('image/jpeg')
+        } catch (e) {
+          // ignore and fallback to mock
+        }
+      }
+
+      if (!imageSrc) {
+        const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='640' height='480'><rect width='100%' height='100%' fill='#ddd'/><text x='50%' y='50%' font-family='Arial' font-size='24' fill='#999' text-anchor='middle' dominant-baseline='middle'>Mock Camera Image</text></svg>`
+        imageSrc = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg)
+      }
       setIsAnalyzing(true)
       const startTime = Date.now()
 
-      // Comprehensive analysis using advanced ML
-      const [emotionResult, attentionResult, fatigueResult] = await Promise.allSettled([
-        advancedMLService.analyzeEmotionAdvanced(mockImageSrc),
-        advancedMLService.analyzeAttentionAdvanced(mockImageSrc, { userProfile, analysisMode }),
-        analyzeFatigueAdvanced(mockImageSrc)
-      ])
+      // If onDeviceOnly, avoid calling remote Python backend and use local/mock analysis only
+      const useRemote = !onDeviceOnly
+
+      const tasks = [
+        advancedMLService.analyzeEmotionAdvanced(imageSrc)
+      ]
+      if (useRemote) tasks.push(advancedMLService.analyzeAttentionAdvanced(imageSrc, { userProfile, analysisMode }))
+      else tasks.push(advancedMLService.analyzeAttentionAdvanced(imageSrc, { userProfile, analysisMode })) // still call but service may fallback to mock without network
+      tasks.push(analyzeFatigueAdvanced(imageSrc))
+
+      const [emotionResult, attentionResult, fatigueResult] = await Promise.allSettled(tasks)
 
       const processingTime = Date.now() - startTime
 
@@ -127,7 +188,7 @@ const EnhancedCameraAnalysis = ({
       updateAdvancedMetrics(emotion, attention, fatigue)
 
       // Generate real-time insights
-      if (analysisMode === 'comprehensive' || analysisMode === 'research') {
+      if ((analysisMode === 'comprehensive' || analysisMode === 'research') && !onDeviceOnly) {
         await generateRealTimeInsights(advancedCognitiveState)
       }
 
@@ -153,7 +214,7 @@ const EnhancedCameraAnalysis = ({
     } finally {
       setIsAnalyzing(false)
     }
-  }, [isActive, analysisMode, visualizations, onCognitiveStateUpdate, onAdvancedInsights, onError, isAnalyzing, userProfile])
+  }, [isActive, analysisMode, visualizations, onCognitiveStateUpdate, onAdvancedInsights, onError, isAnalyzing, userProfile, onDeviceOnly, consentGiven])
 
   // In-memory histories for trend/fatigue (module-level alternatives defined below)
   const MAX_HISTORY = 10
@@ -527,19 +588,21 @@ const EnhancedCameraAnalysis = ({
 
         {/* Camera Feed with Overlay */}
         <div className="relative bg-gray-100 dark:bg-gray-700 rounded-xl overflow-hidden mb-6">
-          {/* <Webcam
-            ref={webcamRef}
-            audio={false}
-            screenshotFormat="image/jpeg"
-            className="w-full h-64 object-cover"
-            onUserMediaError={handleCameraError}
-          /> */}
-          <div className="w-full h-64 bg-gray-300 dark:bg-gray-600 flex items-center justify-center">
-            <Camera className="w-12 h-12 text-gray-500" />
-            <p className="text-sm text-gray-600 dark:text-gray-400 ml-2">
-              Camera feed placeholder
-            </p>
-          </div>
+          {/* Consent / Camera video element */}
+          {!consentGiven ? (
+            <div className="w-full h-64 bg-gray-300 dark:bg-gray-600 flex items-center justify-center flex-col p-4">
+              <Camera className="w-12 h-12 text-gray-500 mb-2" />
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">Camera required for cognitive monitoring.</p>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setConsentGiven(true)} className="btn-primary">Allow Camera</button>
+                <button onClick={() => { setConsentGiven(false); setCameraError('User declined camera access') }} className="btn-ghost">Decline</button>
+              </div>
+            </div>
+          ) : (
+            <div className="w-full h-64 bg-black flex items-center justify-center">
+              <video ref={webcamRef} className="w-full h-full object-cover" playsInline muted />
+            </div>
+          )}
           
           {/* Analysis Overlay Canvas */}
           <canvas

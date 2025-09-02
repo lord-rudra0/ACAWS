@@ -31,6 +31,7 @@ import { useAuth } from '../contexts/AuthContext'
 import geminiService from '../services/geminiService'
 import { learningAPI, wellnessAPI, analyticsAPI } from '../services/api'
 import { userAPI } from '../services/api'
+import { Camera as CameraIcon } from 'lucide-react'
 
 // Simple SVG avatar generator (returns data URL)
 const generateAvatarDataUrl = (text = '', size = 64) => {
@@ -101,6 +102,9 @@ const EnhancedLearning = () => {
   const [autoSuggestEnabled, setAutoSuggestEnabled] = useState(() => {
     try { return JSON.parse(localStorage.getItem('el:autoSuggest')) ?? true } catch { return true }
   })
+  const [onDeviceOnly, setOnDeviceOnly] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('el:onDeviceOnly')) ?? true } catch { return true }
+  })
   const [sessionSavedAt, setSessionSavedAt] = useState(null)
   const [predictionResult, setPredictionResult] = useState(null)
   const [showPredictionExplanation, setShowPredictionExplanation] = useState(false)
@@ -137,6 +141,10 @@ const EnhancedLearning = () => {
         if (settings && typeof settings.autoSuggestEnabled === 'boolean') {
           setAutoSuggestEnabled(settings.autoSuggestEnabled)
           localStorage.setItem('el:autoSuggest', JSON.stringify(settings.autoSuggestEnabled))
+        }
+        if (settings && typeof settings.onDeviceOnly === 'boolean') {
+          setOnDeviceOnly(settings.onDeviceOnly)
+          localStorage.setItem('el:onDeviceOnly', JSON.stringify(settings.onDeviceOnly))
         }
       } catch (err) {
         // ignore - user settings route may not exist for quick dev environments
@@ -662,6 +670,22 @@ const EnhancedLearning = () => {
                   <Users className="w-4 h-4" />
                 </div>
               </div>
+              {/* Privacy toggle: on-device only processing */}
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => setOnDeviceOnly(v => {
+                    const next = !v
+                    try { localStorage.setItem('el:onDeviceOnly', JSON.stringify(next)) } catch {}
+                    userAPI.saveSettings?.({ onDeviceOnly: next }).catch(() => {})
+                    return next
+                  })}
+                  className={`px-3 py-2 rounded-lg text-sm ${onDeviceOnly ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-800'}`}
+                  title="On-device only: when enabled, derived signals stay local and network calls are minimized"
+                >
+                  <CameraIcon className="w-4 h-4 inline mr-2" />
+                  {onDeviceOnly ? 'On-device' : 'Network'}
+                </button>
+              </div>
               {/* header area - saved badge moved next to module Start button */}
             </div>
           </div>
@@ -729,6 +753,7 @@ const EnhancedLearning = () => {
               isActive={isSessionActive}
               onAdvancedInsights={handleAdvancedInsights}
               userProfile={user}
+              onDeviceOnly={onDeviceOnly}
             />
 
             {/* Intelligent Content Adaptation */}

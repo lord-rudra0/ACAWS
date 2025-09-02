@@ -1,310 +1,141 @@
-// Lightweight ML service - heavy dependencies removed for performance
-// Mock implementations for development, real ML handled by Python backend
+// Advanced ML service: prefers Python backend, respects on-device-only privacy flag
+// Provides mock fallbacks when backend is unavailable or privacy forbids remote calls
 
-// Mock TensorFlow-like interface
-const mockTensorFlow = {
-  tensor: (data) => ({ data, shape: [data.length], dispose: () => {} }),
-  ready: () => Promise.resolve(),
-  loadLayersModel: () => Promise.resolve({ predict: () => [0.5] }),
-  tidy: (fn) => fn(),
-  memory: () => ({ numTensors: 0, numBytes: 0 })
-}
+const ENV = (typeof import.meta !== 'undefined' && import.meta.env) ? import.meta.env : {}
+const USE_PROXY = String(ENV.VITE_USE_PY_PROXY || '').toLowerCase() === 'true'
+const EXPRESS_API = ENV.VITE_API_URL || ''
+const DIRECT_PY = ENV.VITE_PYTHON_API_URL || ENV.VITE_PY_BACKEND_URL || 'http://localhost:5000'
+const PY_BASE = USE_PROXY && EXPRESS_API ? `${EXPRESS_API}/api/python` : DIRECT_PY
+const DEBUG = String(ENV.VITE_DEBUG_ADV_ML || '').toLowerCase() === 'true'
 
-// Mock face-api-like interface
-const mockFaceAPI = {
-  loadTinyFaceDetectorModel: () => Promise.resolve(),
-  loadFaceLandmarkTinyModel: () => Promise.resolve(),
-  loadFaceExpressionModel: () => Promise.resolve(),
-  detectSingleFace: () => Promise.resolve(null),
-  detectFaceLandmarks: () => Promise.resolve(null),
-  detectFaceExpressions: () => Promise.resolve(null)
-}
-
-// Mock Matrix-like interface
-const mockMatrix = {
-  Matrix: class {
-    constructor(data) {
-      this.data = data
-      this.rows = data.length
-      this.columns = data[0]?.length || 0
-    }
-    transpose() { return this }
-    mul() { return this }
-    add() { return this }
-    sub() { return this }
-  }
-}
-
-// Mock brain.js-like interface
-const mockBrain = {
-  NeuralNetwork: class {
-    constructor() {
-      this.train = () => Promise.resolve()
-      this.run = () => [0.5]
-    }
-  }
-}
-
-// Resolve backend base: if proxy enabled, route via Express to avoid JWT in browser
-const env = typeof import.meta !== 'undefined' ? (import.meta.env || {}) : {}
-const USE_PROXY = String(env.VITE_USE_PY_PROXY || '').toLowerCase() === 'true'
-const EXPRESS_API = env.VITE_API_URL
-// Python backend base URL: prefer VITE_PYTHON_API_URL, then VITE_PY_BACKEND_URL, else localhost
-const DIRECT_PY = env.VITE_PYTHON_API_URL || env.VITE_PY_BACKEND_URL || 'http://localhost:5000'
-const PY_BACKEND = USE_PROXY && EXPRESS_API ? `${EXPRESS_API}/api/python` : DIRECT_PY
-// Debug flag for verbose ML logging
-const DEBUG_ML = String(env.VITE_DEBUG_ADV_ML || '').toLowerCase() === 'true'
-
-function dbg(...args) {
-  try {
-    if (DEBUG_ML) console.debug('[AdvancedML]', ...args)
-  } catch {}
-}
-
-// Build final Python endpoint path correctly for proxied vs direct calls
+function dbg(...args) { if (DEBUG) console.debug('[advancedMLService]', ...args) }
 function pyEndpoint(path) {
-  // path should start with '/emotion/...' or '/attention/...'
-  const base = PY_BACKEND
-  if (USE_PROXY) {
-    // Express mounts proxy at '/api/python' and expects '/emotion/...'
-    const url = `${base}${path}`
-    dbg('pyEndpoint (proxy)', { url, base, path })
-    return url
-  }
-  // Direct FastAPI expects '/api/...' prefix
-  const url = `${base}/api${path}`
-  dbg('pyEndpoint (direct)', { url, base, path })
-  return url
+  if (USE_PROXY && EXPRESS_API) return `${PY_BASE}${path}`
+  if (DIRECT_PY.endsWith('/api')) return `${DIRECT_PY}${path}`
+  return `${DIRECT_PY}/api${path}`
 }
-
 function getAuthHeader() {
-  // Prefer sending x-auth-token when using proxy; Authorization otherwise
   try {
     const token = localStorage.getItem('token') || localStorage.getItem('auth_token')
     if (!token) return {}
-    if (USE_PROXY) return { 'x-auth-token': token }
-    return { Authorization: `Bearer ${token}` }
-  } catch {
-    return {}
-  }
+    return USE_PROXY ? { 'x-auth-token': token } : { Authorization: `Bearer ${token}` }
+  } catch (e) { return {} }
 }
 
 class AdvancedMLService {
-  constructor() {
-    this.models = {
-      emotion: null,
-      attention: null,
-      fatigue: null,
-      performance: null,
-      wellness: null
-    }
-    
-    this.neuralNetworks = {
-      learningPredictor: null,
-      adaptationEngine: null,
-      wellnessAnalyzer: null
-    }
-    
-    this.isInitialized = false
-    this.initializationPromise = null
-  }
+  _isOnDeviceOnly() { try { const v = localStorage.getItem('el:onDeviceOnly'); return v ? JSON.parse(v) : false } catch { return false } }
 
-  async initialize() {
-    if (this.isInitialized) return
-    if (this.initializationPromise) return this.initializationPromise
-
-    this.initializationPromise = this._performInitialization()
-    await this.initializationPromise
-  }
-
-  async _performInitialization() {
-    try {
-      console.log('🚀 Initializing Advanced ML Service (Lightweight Mode)...')
-      dbg('config', { USE_PROXY, EXPRESS_API, DIRECT_PY, PY_BACKEND })
-      
-      // Mock initialization for development
-      await this.loadMockModels()
-      
-      this.isInitialized = true
-      console.log('✅ Advanced ML Service initialized successfully (Mock Mode)')
-    } catch (error) {
-      console.error('❌ ML Service initialization failed:', error)
-      throw error
-    }
-  }
-
-  async loadMockModels() {
-    // Mock model loading for development
-    await new Promise(resolve => setTimeout(resolve, 100))
-    console.log('📦 Mock ML models loaded (development mode)')
-  }
-
-  // Mock emotion analysis
   async analyzeEmotionAdvanced(imageSrc) {
-    // Mock emotion analysis - real implementation would use Python backend
-    const emotions = ['happy', 'sad', 'angry', 'surprised', 'neutral']
-    const randomEmotion = emotions[Math.floor(Math.random() * emotions.length)]
-    
-    return {
-      emotion: randomEmotion,
-      confidence: 0.7 + Math.random() * 0.3,
-      intensity: Math.random(),
-      timestamp: new Date().toISOString(),
-      source: 'mock_analysis'
+    dbg('analyzeEmotionAdvanced', { onDeviceOnly: this._isOnDeviceOnly() })
+    if (!this._isOnDeviceOnly()) {
+      try {
+        const res = await fetch(pyEndpoint('/vision/emotion'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeader() }, body: JSON.stringify({ image: imageSrc })
+        })
+        if (res.ok) {
+          const j = await res.json()
+          return {
+            emotion: j.emotion || j.label || null,
+            emotions: j.emotions || j.scores || null,
+            confidence: (j.confidence ?? j.confidenceScore) ?? null,
+            timestamp: j.timestamp || new Date().toISOString(),
+            source: 'python_backend', raw: j
+          }
+        }
+        dbg('analyzeEmotionAdvanced backend status', res.status)
+      } catch (err) { dbg('analyzeEmotionAdvanced error', err) }
     }
+    const list = ['happy', 'neutral', 'sad', 'angry', 'surprised']
+    const pick = list[Math.floor(Math.random() * list.length)]
+    return { emotion: pick, confidence: 0.5 + Math.random() * 0.5, timestamp: new Date().toISOString(), source: 'mock' }
   }
 
-  // Mock attention analysis
   async analyzeAttentionAdvanced(imageSrc, options = {}) {
-    // Mock attention analysis - real implementation would use Python backend
-    const attentionScore = 0.6 + Math.random() * 0.4
-    const gazeConfidence = 0.5 + Math.random() * 0.5
-    
-    return {
-      attentionScore,
-      gazeAnalysis: {
-        confidence: gazeConfidence,
-        focusArea: 'center',
-        gazePattern: 'focused'
-      },
-      cognitiveLoad: Math.random(),
-      timestamp: new Date().toISOformat(),
-      source: 'mock_analysis'
+    dbg('analyzeAttentionAdvanced', { onDeviceOnly: this._isOnDeviceOnly() })
+    if (!this._isOnDeviceOnly()) {
+      try {
+        const res = await fetch(pyEndpoint('/vision/attention'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeader() }, body: JSON.stringify({ image: imageSrc, options })
+        })
+        if (res.ok) {
+          const j = await res.json()
+          return {
+            attentionScore: j.attentionScore ?? j.score ?? null,
+            gazeAnalysis: j.gazeAnalysis ?? j.gaze ?? {},
+            cognitiveLoad: j.cognitiveLoad ?? null,
+            timestamp: j.timestamp || new Date().toISOString(),
+            source: 'python_backend', raw: j
+          }
+        }
+        dbg('analyzeAttentionAdvanced backend status', res.status)
+      } catch (err) { dbg('analyzeAttentionAdvanced error', err) }
     }
+    return { attentionScore: 0.5 + Math.random() * 0.5, gazeAnalysis: { focus: 'center', confidence: 0.6 }, cognitiveLoad: 0.4 + Math.random() * 0.6, timestamp: new Date().toISOString(), source: 'mock' }
   }
 
-  // Mock fatigue detection
   async detectFatigueAdvanced(imageSrc) {
-    // Mock fatigue detection - real implementation would use Python backend
-    const fatigueLevel = Math.random() * 0.8
-    const eyeOpenness = 0.3 + Math.random() * 0.7
-    
-    return {
-      fatigueLevel,
-      eyeOpenness,
-      blinkRate: 15 + Math.random() * 10,
-      confidence: 0.6 + Math.random() * 0.4,
-      timestamp: new Date().toISOString(),
-      source: 'mock_analysis'
+    dbg('detectFatigueAdvanced', { onDeviceOnly: this._isOnDeviceOnly() })
+    if (!this._isOnDeviceOnly()) {
+      try {
+        const res = await fetch(pyEndpoint('/vision/fatigue'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeader() }, body: JSON.stringify({ image: imageSrc })
+        })
+        if (res.ok) {
+          const j = await res.json()
+          return { fatigueLevel: j.fatigueLevel ?? null, eyeOpenness: j.eyeOpenness ?? null, blinkRate: j.blinkRate ?? null, timestamp: j.timestamp || new Date().toISOString(), source: 'python_backend', raw: j }
+        }
+        dbg('detectFatigueAdvanced backend status', res.status)
+      } catch (err) { dbg('detectFatigueAdvanced error', err) }
     }
+    return { fatigueLevel: Math.random(), eyeOpenness: 0.3 + Math.random() * 0.7, blinkRate: 10 + Math.floor(Math.random() * 10), timestamp: new Date().toISOString(), source: 'mock' }
   }
 
-  // Performance prediction - call backend
-  async predictPerformance(userData, context) {
-    try {
-      const url = pyEndpoint('/predict/performance')
-      dbg('predictPerformance ->', { url, userData, context })
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
-        body: JSON.stringify({ user: userData, context })
-      })
-      if (!res.ok) throw new Error(`Backend responded ${res.status}`)
-      const json = await res.json()
-      return json
-    } catch (error) {
-      console.error('predictPerformance failed, falling back to mock:', error)
-      // Fallback to mock
-      const baseScore = 70
-      const variation = (Math.random() - 0.5) * 20
-      return {
-        predictedScore: Math.max(0, Math.min(100, baseScore + variation)),
-        confidence: 0.6 + Math.random() * 0.4,
-        factors: ['mood', 'energy', 'focus'],
-        timestamp: new Date().toISOString(),
-        source: 'mock_prediction'
-      }
+  async adaptLearningContent(userProfile = {}, performanceData = {}) {
+    dbg('adaptLearningContent', { onDeviceOnly: this._isOnDeviceOnly() })
+    if (!this._isOnDeviceOnly()) {
+      try {
+        const res = await fetch(pyEndpoint('/adaptation/content'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeader() }, body: JSON.stringify({ user: userProfile, performance: performanceData })
+        })
+        if (res.ok) {
+          const j = await res.json()
+          return { recommendedDifficulty: j.recommendedDifficulty ?? j.difficulty ?? null, contentType: j.contentType ?? 'interactive', duration: j.duration ?? 15, source: 'python_backend', raw: j }
+        }
+        dbg('adaptLearningContent backend status', res.status)
+      } catch (err) { dbg('adaptLearningContent error', err) }
     }
+    const diff = Math.max(1, Math.min(10, 5 + Math.round((Math.random() - 0.5) * 4)))
+    return { recommendedDifficulty: diff, contentType: ['video', 'interactive', 'text'][Math.floor(Math.random() * 3)], duration: 10 + Math.floor(Math.random() * 50), source: 'mock' }
   }
 
-  // Wellness analysis - call backend Python service
-  async analyzeWellnessAdvanced(wellnessData) {
-    try {
-      const url = pyEndpoint('/wellness/predict')
-      dbg('analyzeWellnessAdvanced ->', { url, wellnessData })
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
-        body: JSON.stringify(wellnessData)
-      })
-      if (!res.ok) throw new Error(`Backend responded ${res.status}`)
-      const json = await res.json()
-      // Normalize response shape if backend uses different property names
-      return {
-        wellnessScore: json.wellness_score ?? json.wellnessScore ?? json.score ?? null,
-        recommendations: json.recommendations || [],
-        trends: json.trends || {},
-        timestamp: json.timestamp || new Date().toISOString(),
-        source: json.model_type ? 'real_backend' : 'python_backend',
-        raw: json
-      }
-    } catch (error) {
-      console.error('analyzeWellnessAdvanced failed, falling back to mock:', error)
-      const wellnessScore = 60 + Math.random() * 40
-      const recommendations = [
-        'Take regular breaks',
-        'Stay hydrated',
-        'Practice mindfulness',
-        'Get adequate sleep'
-      ]
-      return {
-        wellnessScore: Math.round(wellnessScore),
-        recommendations: recommendations.slice(0, 2 + Math.floor(Math.random() * 2)),
-        trends: { mood: 'stable', energy: 'improving', stress: 'decreasing' },
-        timestamp: new Date().toISOString(),
-        source: 'mock_analysis'
-      }
+  async analyzeCognitiveState(emotionData = {}, attentionData = {}, fatigueData = {}) {
+    dbg('analyzeCognitiveState', { onDeviceOnly: this._isOnDeviceOnly() })
+    if (!this._isOnDeviceOnly()) {
+      try {
+        const res = await fetch(pyEndpoint('/cognitive/analyze'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeader() }, body: JSON.stringify({ emotion: emotionData, attention: attentionData, fatigue: fatigueData })
+        })
+        if (res.ok) {
+          const j = await res.json()
+          return { cognitiveLoad: j.cognitiveLoad ?? null, emotionalStability: j.emotionalStability ?? null, focusLevel: j.focusLevel ?? null, overallState: j.overallState ?? this._calculateOverallState(j.cognitiveLoad ?? 0, j.emotionalStability ?? 0, j.focusLevel ?? 0), timestamp: j.timestamp || new Date().toISOString(), source: 'python_backend', raw: j }
+        }
+        dbg('analyzeCognitiveState backend status', res.status)
+      } catch (err) { dbg('analyzeCognitiveState error', err) }
     }
-  }
-
-  // Mock learning adaptation
-  async adaptLearningContent(userProfile, performanceData) {
-    // Mock learning adaptation
-    const difficulty = Math.max(1, Math.min(10, 5 + (Math.random() - 0.5) * 4))
-    
-    return {
-      recommendedDifficulty: Math.round(difficulty),
-      contentType: ['video', 'interactive', 'text'][Math.floor(Math.random() * 3)],
-      duration: 15 + Math.floor(Math.random() * 30),
-      confidence: 0.7 + Math.random() * 0.3,
-      timestamp: new Date().toISOString(),
-      source: 'mock_adaptation'
-    }
-  }
-
-  // Mock cognitive state analysis
-  async analyzeCognitiveState(emotionData, attentionData, fatigueData) {
-    // Mock cognitive state analysis
     const cognitiveLoad = (attentionData?.cognitiveLoad || 0.5) + Math.random() * 0.3
-    const emotionalStability = 0.6 + Math.random() * 0.4
+    const emotionalStability = 0.5 + Math.random() * 0.5
     const focusLevel = (attentionData?.attentionScore || 0.5) + Math.random() * 0.3
-    
-    return {
-      cognitiveLoad: Math.min(1, Math.max(0, cognitiveLoad)),
-      emotionalStability: Math.min(1, Math.max(0, emotionalStability)),
-      focusLevel: Math.min(1, Math.max(0, focusLevel)),
-      overallState: this._calculateOverallState(cognitiveLoad, emotionalStability, focusLevel),
-      timestamp: new Date().toISOString(),
-      source: 'mock_analysis'
-    }
+    return { cognitiveLoad: Math.min(1, Math.max(0, cognitiveLoad)), emotionalStability: Math.min(1, Math.max(0, emotionalStability)), focusLevel: Math.min(1, Math.max(0, focusLevel)), overallState: this._calculateOverallState(cognitiveLoad, emotionalStability, focusLevel), timestamp: new Date().toISOString(), source: 'mock' }
   }
 
   _calculateOverallState(cognitiveLoad, emotionalStability, focusLevel) {
-    const avg = (cognitiveLoad + emotionalStability + focusLevel) / 3
+    const avg = (Number(cognitiveLoad) + Number(emotionalStability) + Number(focusLevel)) / 3
     if (avg >= 0.8) return 'excellent'
     if (avg >= 0.6) return 'good'
     if (avg >= 0.4) return 'fair'
     return 'poor'
   }
-
-  // Cleanup method
-  dispose() {
-    this.isInitialized = false
-    this.initializationPromise = null
-    console.log('🧹 Advanced ML Service disposed')
-  }
 }
 
-// Export singleton instance
 const advancedMLService = new AdvancedMLService()
 export default advancedMLService
