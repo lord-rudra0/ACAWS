@@ -1,5 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 import logging
@@ -57,12 +56,11 @@ else:
         async def generate_wellness_insights(self, user_id: str):
             return {"summary": {"mood": 7.0, "stress": 3.5, "energy": 7.5}}
 
-from core.auth import verify_token
+# Authentication removed for development: verify_token intentionally not used
 from database.connection import get_db
 from database.logger import log_emotion, log_attention, log_generic
 
 logger = logging.getLogger(__name__)
-security = HTTPBearer()
 
 # Initialize routers
 emotion_router = APIRouter()
@@ -107,26 +105,23 @@ class CognitiveState(BaseModel):
 # Emotion Analysis Routes
 @emotion_router.post("/analyze")
 async def analyze_emotion(
-    frame_data: FrameData,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    frame_data: FrameData
 ):
     """Analyze emotion from camera frame"""
     try:
-        user = await verify_token(credentials.credentials)
-        
         # Use shared singleton service instance
         result = await emotion_service.analyze_frame(frame_data.frame)
 
         # Persist full payload to MongoDB
         try:
-            await log_emotion(user_id=user["id"], payload=result, session_id=None, source="api")
+            await log_emotion(user_id=None, payload=result, session_id=None, source="api")
         except Exception as e:
             logger.error(f"Emotion result persistence failed: {e}")
         
         return {
             "success": True,
             "data": result,
-            "user_id": user["id"]
+            "user_id": None
         }
         
     except Exception as e:
@@ -136,13 +131,10 @@ async def analyze_emotion(
 @emotion_router.get("/trends/{user_id}")
 async def get_emotion_trends(
     user_id: str,
-    time_window: int = 5,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    time_window: int = 5
 ):
     """Get emotion trends for user"""
     try:
-        user = await verify_token(credentials.credentials)
-        
         # Use shared singleton service instance
         trends = emotion_service.get_emotion_trends(time_window)
         
@@ -159,26 +151,22 @@ async def get_emotion_trends(
 # Attention Tracking Routes
 @attention_router.post("/track")
 async def track_attention(
-    frame_data: FrameData,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    frame_data: FrameData
 ):
     """Track attention from camera frame"""
     try:
-        user = await verify_token(credentials.credentials)
-        
-        # Use shared singleton service instance
         result = await attention_service.track_attention(frame_data.frame)
 
         # Persist full payload to MongoDB
         try:
-            await log_attention(user_id=user["id"], payload=result, session_id=None, source="api")
+            await log_attention(user_id=None, payload=result, session_id=None, source="api")
         except Exception as e:
             logger.error(f"Attention result persistence failed: {e}")
         
         return {
             "success": True,
             "data": result,
-            "user_id": user["id"]
+            "user_id": None
         }
         
     except Exception as e:
@@ -188,13 +176,10 @@ async def track_attention(
 @attention_router.get("/trends/{user_id}")
 async def get_attention_trends(
     user_id: str,
-    time_window: int = 10,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    time_window: int = 10
 ):
     """Get attention trends for user"""
     try:
-        user = await verify_token(credentials.credentials)
-        
         # Use shared singleton service instance
         trends = attention_service.get_attention_trends(time_window)
         
@@ -213,13 +198,10 @@ async def get_attention_trends(
 async def adapt_content(
     user_id: str,
     cognitive_state: CognitiveState,
-    current_content: LearningContent,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    current_content: LearningContent
 ):
     """Adapt learning content based on cognitive state"""
     try:
-        user = await verify_token(credentials.credentials)
-        
         # Use shared singleton service instance
         result = await adaptive_service.adapt_content(
             user_id,
@@ -254,13 +236,10 @@ async def adapt_content(
 async def generate_learning_path(
     user_id: str,
     subject: str,
-    target_competency: str,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    target_competency: str
 ):
     """Generate personalized learning path"""
     try:
-        user = await verify_token(credentials.credentials)
-        
         # Use shared singleton service instance
         result = await adaptive_service.generate_learning_path(
             user_id, subject, target_competency
@@ -279,13 +258,10 @@ async def generate_learning_path(
 @learning_router.post("/recommend-content")
 async def recommend_next_content(
     user_id: str,
-    performance_data: Dict,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    performance_data: Dict
 ):
     """Recommend next content based on performance"""
     try:
-        user = await verify_token(credentials.credentials)
-        
         # Use shared singleton service instance
         result = await adaptive_service.recommend_next_content(user_id, performance_data)
         
@@ -303,13 +279,10 @@ async def recommend_next_content(
 @wellness_router.post("/track-metrics")
 async def track_wellness_metrics(
     user_id: str,
-    metrics: WellnessMetrics,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    metrics: WellnessMetrics
 ):
     """Track comprehensive wellness metrics"""
     try:
-        user = await verify_token(credentials.credentials)
-        
         # Use shared singleton service instance
         result = await wellness_service.track_wellness_metrics(
             user_id, metrics.dict()
@@ -328,13 +301,10 @@ async def track_wellness_metrics(
 @wellness_router.post("/suggest-break")
 async def suggest_break_activities(
     user_id: str,
-    current_state: Dict,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    current_state: Dict
 ):
     """Suggest break activities based on current state"""
     try:
-        user = await verify_token(credentials.credentials)
-        
         # Use shared singleton service instance
         result = await wellness_service.suggest_break_activities(user_id, current_state)
         
@@ -350,13 +320,10 @@ async def suggest_break_activities(
 
 @wellness_router.get("/insights/{user_id}")
 async def get_wellness_insights(
-    user_id: str,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    user_id: str
 ):
     """Get comprehensive wellness insights"""
     try:
-        user = await verify_token(credentials.credentials)
-        
         # Use shared singleton service instance
         result = await wellness_service.generate_wellness_insights(user_id)
         
@@ -372,21 +339,17 @@ async def get_wellness_insights(
 
 # Get ML model information
 @wellness_router.get("/ml-model-info")
-async def get_ml_model_info(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-):
+async def get_ml_model_info():
     """Get information about the wellness ML model"""
     try:
-        user = await verify_token(credentials.credentials)
-        
         model_info = wellness_ml_model.get_model_info()
-        
+
         return {
             "success": True,
             "model_info": model_info,
             "timestamp": datetime.now().isoformat()
         }
-        
+
     except Exception as e:
         logger.error(f"ML model info endpoint failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -471,51 +434,37 @@ async def predict_wellness(
 # Export user wellness data
 @wellness_router.get("/export-data/{user_id}")
 async def export_user_wellness_data(
-    user_id: str,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    user_id: str
 ):
     """Export user's wellness data for analysis"""
     try:
-        user = await verify_token(credentials.credentials)
-        
-        # Only allow users to export their own data or admins
-        if user.get('id') != user_id and user.get('role') != 'admin':
-            raise HTTPException(status_code=403, detail="Not authorized to export this user's data")
-        
+        # In dev mode, allow export without auth; production should re-enable checks
         user_data = wellness_ml_model.export_user_data(user_id)
-        
+
         return {
             "success": True,
             "user_data": user_data,
             "timestamp": datetime.now().isoformat()
         }
-        
+
     except Exception as e:
         logger.error(f"Data export endpoint failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Retrain ML model (admin only)
 @wellness_router.post("/retrain-model")
-async def retrain_ml_model(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-):
+async def retrain_ml_model():
     """Retrain the wellness ML model (admin only)"""
     try:
-        user = await verify_token(credentials.credentials)
-        
-        # Only admins can retrain the model
-        if user.get('role') != 'admin':
-            raise HTTPException(status_code=403, detail="Admin access required")
-        
-        # Trigger model retraining
+        # In dev mode retraining is allowed without auth; production should require admin
         wellness_ml_model._retrain_model()
-        
+
         return {
             "success": True,
             "message": "Model retraining initiated",
             "timestamp": datetime.now().isoformat()
         }
-        
+
     except Exception as e:
         logger.error(f"Model retraining endpoint failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -524,15 +473,12 @@ async def retrain_ml_model(
 @analytics_router.get("/dashboard/{user_id}")
 async def get_analytics_dashboard(
     user_id: str,
-    time_range: str = "week",
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    time_range: str = "week"
 ):
     """Get comprehensive analytics dashboard data"""
     try:
-        user = await verify_token(credentials.credentials)
-        
         # Aggregate data from shared singleton services
-        
+
         # Get trends from each service
         emotion_trends = emotion_service.get_emotion_trends()
         attention_trends = attention_service.get_attention_trends()
@@ -587,13 +533,10 @@ async def get_analytics_dashboard(
 async def generate_analytics_report(
     user_id: str,
     report_type: str,
-    time_range: str,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    time_range: str
 ):
     """Generate comprehensive analytics report"""
     try:
-        user = await verify_token(credentials.credentials)
-        
         # Mock report generation
         report_data = {
             "report_id": f"report_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
