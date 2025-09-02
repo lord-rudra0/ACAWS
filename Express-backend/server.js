@@ -11,13 +11,13 @@ import { Server } from 'socket.io'
 import authRoutes from './routes/auth.js'
 import userRoutes from './routes/users.js'
 import learningRoutes from './routes/learning.js'
+import tutorRoutes from './routes/tutor.js'
 import wellnessRoutes from './routes/wellness.js'
 import analyticsRoutes from './routes/analytics.js'
 import communityRoutes from './routes/community.js'
 import adminRoutes from './routes/admin.js'
 import aiRoutes from './routes/ai.js'
 import pythonProxyRoutes from './routes/pythonProxy.js'
-import tutorRoutes from './routes/tutor.js'
 
 // Import middleware
 import { authenticateToken } from './middleware/auth.js'
@@ -83,6 +83,7 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes)
 app.use('/api/users', authenticateToken, userRoutes)
 app.use('/api/learning', authenticateToken, learningRoutes)
+app.use('/api/tutor', authenticateToken, tutorRoutes)
 app.use('/api/wellness', wellnessRoutes) // Temporarily removed auth for development
 app.use('/api/analytics', authenticateToken, analyticsRoutes)
 app.use('/api/community', authenticateToken, communityRoutes)
@@ -90,8 +91,6 @@ app.use('/api/admin', authenticateToken, adminRoutes)
 app.use('/api/ai', authenticateToken, aiRoutes)
 // Python backend proxy (no auth middleware; proxy injects token from header/cookie)
 app.use('/api/python', pythonProxyRoutes)
-// Tutor routes (learning roadmap / chapters / quizzes)
-app.use('/api/tutor', authenticateToken, tutorRoutes)
 
 // Health check endpoint
 app.get('/health', (req, res) => {

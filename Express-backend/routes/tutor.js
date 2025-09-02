@@ -1,45 +1,115 @@
 import express from 'express'
-import { body, validationResult } from 'express-validator'
-import { asyncHandler } from '../middleware/errorHandler.js'
 import tutorService from '../services/tutorService.js'
 
 const router = express.Router()
 
-// Get available roadmaps
-router.get('/roadmaps', asyncHandler(async (req, res) => {
-  const maps = await tutorService.getRoadmaps()
-  res.json({ success: true, roadmaps: maps })
-}))
+// List roadmaps
+router.get('/roadmaps', async (req, res) => {
+  try {
+    const items = await tutorService.listRoadmaps()
+    res.json({ ok: true, data: items })
+  } catch (err) {
+    console.error('GET /tutor/roadmaps', err)
+    res.status(500).json({ ok: false, error: 'failed to list roadmaps' })
+  }
+})
 
-// Get chapter content
-router.get('/chapters/:id', asyncHandler(async (req, res) => {
-  const { id } = req.params
-  const chapter = await tutorService.getChapter(id)
-  if (!chapter) return res.status(404).json({ success: false, message: 'Chapter not found' })
-  res.json({ success: true, chapter })
-}))
+// Get single roadmap
+router.get('/roadmaps/:id', async (req, res) => {
+  try {
+    const item = await tutorService.getRoadmap(req.params.id)
+    if (!item) return res.status(404).json({ ok: false, error: 'not found' })
+    res.json({ ok: true, data: item })
+  } catch (err) {
+    console.error('GET /tutor/roadmaps/:id', err)
+    res.status(500).json({ ok: false, error: 'failed to fetch roadmap' })
+  }
+})
 
-// Submit quiz
-router.post('/quizzes/:id/submit', [
-  body('answers').isArray().withMessage('Answers array required'),
-  body('timeTaken').optional().isInt({ min: 0 })
-], asyncHandler(async (req, res) => {
-  const errors = validationResult(req)
-  if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() })
+// Get user progress for roadmap
+router.get('/roadmaps/:id/progress', async (req, res) => {
+  try {
+    const userId = req.user?.id || req.query.user_id || null
+    if (!userId) return res.status(400).json({ ok: false, error: 'user_id required' })
+    const data = await tutorService.getUserProgress(userId, req.params.id)
+    res.json({ ok: true, data })
+  } catch (err) {
+    console.error('GET /tutor/roadmaps/:id/progress', err)
+    res.status(500).json({ ok: false, error: 'failed to fetch progress' })
+  }
+})
 
-  const userId = req.user?.id
-  const { id } = req.params
-  const { answers, timeTaken = 0, moduleId } = req.body
+// Recommend next chapter for user in roadmap
+router.get('/roadmaps/:id/recommend', async (req, res) => {
+  try {
+    const userId = req.user?.id || req.query.user_id || null
+    if (!userId) return res.status(400).json({ ok: false, error: 'user_id required' })
+    const ch = await tutorService.recommendNextChapter(userId, req.params.id)
+    res.json({ ok: true, data: ch })
+  } catch (err) {
+    console.error('GET /tutor/roadmaps/:id/recommend', err)
+    res.status(500).json({ ok: false, error: 'failed to compute recommendation' })
+  }
+})
 
-  const { result, suggestion } = await tutorService.submitQuiz(userId, id, answers, timeTaken, moduleId)
-  res.json({ success: true, result, suggestion })
-}))
+// Create roadmap
+router.post('/roadmaps', async (req, res) => {
+  try {
+    const rd = await tutorService.createRoadmap(req.body)
+    res.status(201).json({ ok: true, data: rd })
+  } catch (err) {
+    console.error('POST /tutor/roadmaps', err)
+    res.status(500).json({ ok: false, error: 'failed to create roadmap' })
+  }
+})
 
-// Get user progress
-router.get('/progress', asyncHandler(async (req, res) => {
-  const userId = req.user?.id
-  const progress = await tutorService.getUserProgress(userId)
-  res.json({ success: true, progress })
-}))
+// Create chapter
+router.post('/chapters', async (req, res) => {
+  try {
+    const ch = await tutorService.createChapter(req.body)
+    res.status(201).json({ ok: true, data: ch })
+  } catch (err) {
+    console.error('POST /tutor/chapters', err)
+    res.status(500).json({ ok: false, error: 'failed to create chapter' })
+  }
+})
+
+// Create quiz
+router.post('/quizzes', async (req, res) => {
+  try {
+    const q = await tutorService.createQuiz(req.body)
+    res.status(201).json({ ok: true, data: q })
+  } catch (err) {
+    console.error('POST /tutor/quizzes', err)
+    res.status(500).json({ ok: false, error: 'failed to create quiz' })
+  }
+})
+
+// Submit quiz result
+router.post('/quizzes/:quizId/submit', async (req, res) => {
+  try {
+    const userId = req.user?.id || req.body.user_id || 'anonymous'
+    const quizId = req.params.quizId
+    const payload = { quiz_id: quizId, answers: req.body.answers || [], score: req.body.score || 0 }
+    const saved = await tutorService.submitQuizResult(userId, payload)
+    res.status(201).json({ ok: true, data: saved })
+  } catch (err) {
+    console.error('POST /tutor/quizzes/:quizId/submit', err)
+    res.status(500).json({ ok: false, error: 'failed to submit quiz result' })
+  }
+})
+
+// Get user's history for a quiz
+router.get('/quizzes/:quizId/history', async (req, res) => {
+  try {
+    const userId = req.user?.id || req.query.user_id || 'anonymous'
+    const quizId = req.params.quizId
+    const items = await tutorService.getUserQuizHistory(userId, quizId)
+    res.json({ ok: true, data: items })
+  } catch (err) {
+    console.error('GET /tutor/quizzes/:quizId/history', err)
+    res.status(500).json({ ok: false, error: 'failed to fetch history' })
+  }
+})
 
 export default router

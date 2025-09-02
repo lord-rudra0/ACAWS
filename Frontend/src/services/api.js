@@ -361,6 +361,53 @@ export const learningAPI = {
   }
 }
 
+export const tutorAPI = {
+  listRoadmaps: async () => {
+    try {
+      const response = await expressAPI.get('/api/tutor/roadmaps')
+      return response.data
+    } catch (error) {
+      throw new Error(error.message || 'Failed to list roadmaps')
+    }
+  },
+
+  getRoadmap: async (id) => {
+    try {
+      const response = await expressAPI.get(`/api/tutor/roadmaps/${id}`)
+      return response.data
+    } catch (error) {
+      throw new Error(error.message || 'Failed to get roadmap')
+    }
+  },
+
+  getProgress: async (roadmapId, userId) => {
+    try {
+      const response = await expressAPI.get(`/api/tutor/roadmaps/${roadmapId}/progress`, { params: { user_id: userId } })
+      return response.data
+    } catch (error) {
+      throw new Error(error.message || 'Failed to fetch progress')
+    }
+  },
+
+  recommendNext: async (roadmapId, userId) => {
+    try {
+      const response = await expressAPI.get(`/api/tutor/roadmaps/${roadmapId}/recommend`, { params: { user_id: userId } })
+      return response.data
+    } catch (error) {
+      throw new Error(error.message || 'Failed to fetch recommendation')
+    }
+  },
+
+  submitQuizResult: async (quizId, payload) => {
+    try {
+      const response = await expressAPI.post(`/api/tutor/quizzes/${quizId}/submit`, payload)
+      return response.data
+    } catch (error) {
+      throw new Error(error.message || 'Failed to submit quiz result')
+    }
+  }
+}
+
 export const wellnessAPI = {
   recordEntry: async (entryData) => {
     try {

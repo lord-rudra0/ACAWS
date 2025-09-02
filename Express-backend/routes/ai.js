@@ -12,21 +12,13 @@ const MIN_INTERVAL_MS = Number(process.env.GEMINI_MIN_INTERVAL_MS || 1200)
 let activeCount = 0
 let lastCallAt = 0
 const waitQueue = []
-let geminiBackoffUntil = 0 // timestamp (ms) to pause outbound Gemini calls when upstream returns 429
 
 async function acquireSlot() {
-  const canRun = () => activeCount < MAX_CONCURRENT && (Date.now() - lastCallAt) >= MIN_INTERVAL_MS && Date.now() >= geminiBackoffUntil
+  const canRun = () => activeCount < MAX_CONCURRENT && (Date.now() - lastCallAt) >= MIN_INTERVAL_MS
   if (canRun()) {
     activeCount += 1
     return
   }
-
-  // If currently in backoff window, wait until it expires before queuing
-  if (Date.now() < geminiBackoffUntil) {
-    const waitMs = geminiBackoffUntil - Date.now()
-    await new Promise(resolve => setTimeout(resolve, waitMs))
-  }
-
   await new Promise(resolve => waitQueue.push(resolve))
   // Woken up: take slot
   activeCount += 1
@@ -85,10 +77,6 @@ function handleGeminiError(res, error) {
       try { res.set('Retry-After', String(retryAfterSeconds)) } catch (e) {}
     }
     console.warn('[Gemini] 429 rate limit returned. Suggest Retry-After:', retryAfterSeconds)
-  // set a global backoff window to avoid repeat storms
-  const backoffSec = retryAfterSeconds || 60
-  geminiBackoffUntil = Date.now() + backoffSec * 1000
-  console.warn('[Gemini] Entering server-side backoff until', new Date(geminiBackoffUntil).toISOString())
     return res.status(429).json({ success: false, message, retryAfterSeconds })
   }
 
