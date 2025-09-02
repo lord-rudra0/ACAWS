@@ -156,12 +156,8 @@ const EnhancedLearning = () => {
   // allow selecting an existing module in the modal
   const [selectedModuleId, setSelectedModuleId] = useState(null)
 
-  const [autoSuggestEnabled, setAutoSuggestEnabled] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('el:autoSuggest')) ?? true } catch { return true }
-  })
-  const [onDeviceOnly, setOnDeviceOnly] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('el:onDeviceOnly')) ?? true } catch { return true }
-  })
+  const [autoSuggestEnabled, setAutoSuggestEnabled] = useState(true)
+  const [onDeviceOnly, setOnDeviceOnly] = useState(false)
   const [sessionSavedAt, setSessionSavedAt] = useState(null)
   const [predictionResult, setPredictionResult] = useState(null)
   const [showPredictionExplanation, setShowPredictionExplanation] = useState(false)
@@ -209,7 +205,6 @@ const EnhancedLearning = () => {
         }
         if (settings && typeof settings.onDeviceOnly === 'boolean') {
           setOnDeviceOnly(settings.onDeviceOnly)
-          localStorage.setItem('el:onDeviceOnly', JSON.stringify(settings.onDeviceOnly))
         }
       } catch (err) {
         // ignore - user settings route may not exist for quick dev environments
@@ -1065,7 +1060,6 @@ const EnhancedLearning = () => {
                 <SecondaryBtn
                   onClick={() => setOnDeviceOnly(v => {
                     const next = !v
-                    try { localStorage.setItem('el:onDeviceOnly', JSON.stringify(next)) } catch {}
                     userAPI.saveSettings?.({ onDeviceOnly: next }).catch(() => {})
                     return next
                   })}

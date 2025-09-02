@@ -10,26 +10,48 @@ const createAPIInstance = (baseURL, name) => {
     }
   })
 
+  // Simple global backoff for Express backend when 429 responses are received.
+  // Stored on window so other modules can inspect it during debugging.
+  window.__expressBackoffUntil = window.__expressBackoffUntil || 0
+  const _waitMs = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+
   // Request interceptor with retry logic
   instance.interceptors.request.use(
-    (config) => {
-      const token = localStorage.getItem('token')
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`
+    async (config) => {
+      // Respect a global backoff timestamp if set by previous 429 responses.
+      try {
+        const now = Date.now()
+        const until = window.__expressBackoffUntil || 0
+        if (until && now < until) {
+          const waitMs = until - now
+          console.warn(`${name} API: global backoff active, delaying request ${waitMs}ms`)
+          await _waitMs(waitMs)
+        }
+      } catch (e) {}
+
+      // Add auth header and request metadata
+      try {
+        const token = localStorage.getItem('token')
+        if (token) {
+          config.headers = config.headers || {}
+          config.headers.Authorization = `Bearer ${token}`
+        }
+
+        // Add request ID for tracking
+        config.metadata = {
+          requestId: `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          startTime: Date.now()
+        }
+
+        console.log(`📤 ${name} API Request:`, {
+          method: config.method?.toUpperCase(),
+          url: config.url,
+          requestId: config.metadata.requestId
+        })
+      } catch (e) {
+        // keep going even if metadata setup fails
       }
-      
-      // Add request ID for tracking
-      config.metadata = {
-        requestId: `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        startTime: Date.now()
-      }
-      
-      console.log(`📤 ${name} API Request:`, {
-        method: config.method?.toUpperCase(),
-        url: config.url,
-        requestId: config.metadata.requestId
-      })
-      
+
       return config
     },
     (error) => {
@@ -62,7 +84,7 @@ const createAPIInstance = (baseURL, name) => {
         duration: `${duration}ms`
       })
       
-      // Handle authentication errors
+  // Handle authentication errors
       if (error.response?.status === 401) {
         localStorage.removeItem('token')
         delete axios.defaults.headers.common['Authorization']
@@ -73,6 +95,27 @@ const createAPIInstance = (baseURL, name) => {
         }
       }
       
+      // If server returned 429 Too Many Requests, set a global backoff to avoid storming the server
+      try {
+        if (error.response?.status === 429) {
+          // Try to extract Retry-After from headers or body
+          let retryAfterSeconds = undefined
+          try {
+            const h = error.response.headers || {}
+            const ra = h['retry-after'] || h['Retry-After'] || h['retry-after'.toLowerCase()]
+            if (ra) retryAfterSeconds = Number(ra)
+          } catch (e) {}
+          if (!retryAfterSeconds && error.response?.data?.retryAfterSeconds) retryAfterSeconds = Number(error.response.data.retryAfterSeconds)
+          // Fallback to a small default if not provided
+          const fallbackSeconds = 3
+          const until = Date.now() + (Number.isFinite(retryAfterSeconds) ? retryAfterSeconds * 1000 : fallbackSeconds * 1000)
+          window.__expressBackoffUntil = until
+          console.warn(`${name} API: received 429, setting global backoff until ${new Date(until).toISOString()}`)
+        }
+      } catch (e) {
+        console.warn('Failed to set global backoff', e)
+      }
+
       // Retry logic for specific errors
       if (shouldRetryRequest(error) && (!config._retryCount || config._retryCount < 3)) {
         config._retryCount = (config._retryCount || 0) + 1
@@ -85,6 +128,20 @@ const createAPIInstance = (baseURL, name) => {
         return instance(config)
       }
       
+  // Instrument failed requests into a global list for easier debugging in dev
+      try {
+        window.__apiFailures = window.__apiFailures || []
+        window.__apiFailures.push({
+          name,
+          url: config?.url,
+          method: config?.method,
+          status: error.response?.status,
+          message: error.response?.data?.message || error.message,
+          duration,
+          time: Date.now()
+        })
+      } catch (e) {}
+
       return Promise.reject({
         message: error.response?.data?.message || error.message || 'Network error',
         status: error.response?.status,
@@ -118,6 +175,19 @@ const expressAPI = createAPIInstance(
 expressAPI.get('/health')
   .then(() => console.log('✅ Successfully connected to Express backend'))
   .catch(err => console.error('❌ Could not connect to Express backend:', err.message))
+
+// Convenience debug helper: send a simple echo to Express to verify connectivity
+expressAPI.debugEcho = async (payload = {}) => {
+  try {
+    console.log('[expressAPI] debugEcho ->', payload)
+    const res = await expressAPI.post('/api/debug/echo', payload)
+    console.log('[expressAPI] debugEcho response', res.status, res.data)
+    return res.data
+  } catch (err) {
+    console.error('[expressAPI] debugEcho failed', err)
+    throw err
+  }
+}
 
 const pythonAPI = createAPIInstance(
   import.meta.env.VITE_PY_API_URL || 'http://localhost:8000',

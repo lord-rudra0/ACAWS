@@ -17,6 +17,7 @@ import communityRoutes from './routes/community.js'
 import adminRoutes from './routes/admin.js'
 import aiRoutes from './routes/ai.js'
 import pythonProxyRoutes from './routes/pythonProxy.js'
+import tutorRoutes from './routes/tutor.js'
 
 // Import middleware
 import { authenticateToken } from './middleware/auth.js'
@@ -89,6 +90,8 @@ app.use('/api/admin', authenticateToken, adminRoutes)
 app.use('/api/ai', authenticateToken, aiRoutes)
 // Python backend proxy (no auth middleware; proxy injects token from header/cookie)
 app.use('/api/python', pythonProxyRoutes)
+// Tutor routes (learning roadmap / chapters / quizzes)
+app.use('/api/tutor', authenticateToken, tutorRoutes)
 
 // Health check endpoint
 app.get('/health', (req, res) => {

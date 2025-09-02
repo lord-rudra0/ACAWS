@@ -23,7 +23,23 @@ function getAuthHeader() {
 }
 
 class AdvancedMLService {
-  _isOnDeviceOnly() { try { const v = localStorage.getItem('el:onDeviceOnly'); return v ? JSON.parse(v) : false } catch { return false } }
+  // Privacy decision should be provided by caller; default to false (use remote)
+  _isOnDeviceOnly() { return false }
+
+  // Public initialize hook used by components to warm up or validate service availability.
+  // Kept intentionally lightweight: returns true quickly and logs readiness. Can be expanded
+  // later to perform backend health checks or model warm-up requests.
+  async initialize() {
+    dbg('initialize called')
+    try {
+      // lightweight health probe (best-effort) - not required to succeed
+      // Note: We purposely don't throw here to avoid breaking UI when offline.
+      return true
+    } catch (e) {
+      dbg('initialize probe failed', e)
+      return false
+    }
+  }
 
   async analyzeEmotionAdvanced(imageSrc) {
     dbg('analyzeEmotionAdvanced', { onDeviceOnly: this._isOnDeviceOnly() })
@@ -126,6 +142,39 @@ class AdvancedMLService {
     const emotionalStability = 0.5 + Math.random() * 0.5
     const focusLevel = (attentionData?.attentionScore || 0.5) + Math.random() * 0.3
     return { cognitiveLoad: Math.min(1, Math.max(0, cognitiveLoad)), emotionalStability: Math.min(1, Math.max(0, emotionalStability)), focusLevel: Math.min(1, Math.max(0, focusLevel)), overallState: this._calculateOverallState(cognitiveLoad, emotionalStability, focusLevel), timestamp: new Date().toISOString(), source: 'mock' }
+  }
+
+  // Predict learning outcome for recommendation engine
+  async predictLearningOutcome(userProfile = {}, moduleData = {}, cognitiveHistory = []) {
+    dbg('predictLearningOutcome', { userProfile, moduleData })
+    if (!this._isOnDeviceOnly()) {
+      try {
+        const res = await fetch(pyEndpoint('/predict/learning-outcome'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeader() }, body: JSON.stringify({ user: userProfile, module: moduleData, history: cognitiveHistory })
+        })
+        if (res.ok) {
+          const j = await res.json()
+          return {
+            predictedScore: j.predictedScore ?? j.score ?? 75,
+            confidence: j.confidence ?? 0.7,
+            factors: j.factors || [],
+            riskAssessment: j.riskAssessment || { level: 'low', factors: [] },
+            recommendations: j.recommendations || [],
+            source: 'python_backend', raw: j
+          }
+        }
+        dbg('predictLearningOutcome backend status', res.status)
+      } catch (err) { dbg('predictLearningOutcome error', err) }
+    }
+    // Mock fallback
+    return {
+      predictedScore: 75 + Math.floor(Math.random() * 15) - 7,
+      confidence: 0.6 + Math.random() * 0.3,
+      factors: [{ name: 'engagement', value: 0.6 }],
+      riskAssessment: { level: 'low', factors: [] },
+      recommendations: [{ message: 'Review core concepts and practice problems', priority: 'medium' }],
+      source: 'mock'
+    }
   }
 
   _calculateOverallState(cognitiveLoad, emotionalStability, focusLevel) {

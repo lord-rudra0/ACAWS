@@ -18,6 +18,9 @@ class GeminiService {
     }
     this.conversationHistory = new Map()
 
+  // Global backoff timestamp (ms) - when set, client waits until this time before new requests
+  this._globalBackoffUntil = 0
+
     // Client-side rate limiting (token bucket)
     this.rate = {
       capacity: Number(import.meta.env.VITE_GEMINI_RATE_CAPACITY) || 5, // max requests per window
@@ -34,6 +37,12 @@ class GeminiService {
 
   // Token bucket acquire; waits when empty to spread requests
   async _acquireToken() {
+    // Respect global backoff window before attempting to acquire tokens
+    if (this._globalBackoffUntil && Date.now() < this._globalBackoffUntil) {
+      const waitMs = this._globalBackoffUntil - Date.now()
+      console.warn(`[GeminiService] Global backoff active, waiting ${waitMs}ms before acquiring token`)
+      await this._wait(waitMs)
+    }
     const now = Date.now()
     const elapsed = now - this.rate.lastRefill
     if (elapsed >= this.rate.refillIntervalMs) {
@@ -90,11 +99,28 @@ class GeminiService {
         const isAbort = err?.name === 'AbortError' || /abort(ed)?/i.test(String(err?.message || err))
         const isRetryable = isRateLimited || isAbort || (status >= 500 && status < 600)
         if (!isRetryable || attempt === maxRetries) break
-        // Respect Retry-After when available
-        const retryAfter = Number(err?.headers?.get?.('retry-after'))
-        const delay = Number.isFinite(retryAfter)
-          ? retryAfter * 1000
-          : Math.min(10000, baseDelay * Math.pow(2, attempt)) + Math.floor(Math.random() * 300)
+        // Respect Retry-After when available (support Headers.get or numeric field)
+        let retryAfterSeconds = undefined
+        try {
+          if (err?.headers && typeof err.headers.get === 'function') {
+            const v = err.headers.get('Retry-After') || err.headers.get('retry-after')
+            if (v) retryAfterSeconds = Number(v)
+          }
+        } catch (e) {}
+        if (!retryAfterSeconds && err?.retryAfterSeconds) retryAfterSeconds = Number(err.retryAfterSeconds)
+
+        const delay = Number.isFinite(retryAfterSeconds)
+          ? retryAfterSeconds * 1000
+          : Math.min(60000, baseDelay * Math.pow(2, attempt) + Math.floor(Math.random() * 500))
+
+        // If rate limited, set a global backoff to avoid multiple concurrent clients hammering the backend
+        if (isRateLimited) {
+          this._globalBackoffUntil = Date.now() + delay
+          console.warn(`[GeminiService] Received 429 - backing off for ${delay}ms (global)`)
+        } else {
+          console.warn(`[GeminiService] Transient error - retrying after ${delay}ms (attempt ${attempt + 1})`)
+        }
+
         await this._wait(delay)
         attempt += 1
       }

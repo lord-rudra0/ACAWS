@@ -682,21 +682,42 @@ async def analyze_cognitive_realtime(payload: RealtimeSignals):
 @analytics_router.post('/enhanced/analyze')
 async def enhanced_analyze(payload: Dict):
     """Call the enhanced cognitive analyzer service with a camera frame payload."""
+    print("🚀 [API] Enhanced analyze endpoint called!")
+    print(f"🚀 [API] Payload type: {type(payload)}")
+    print(f"🚀 [API] Payload keys: {list(payload.keys()) if isinstance(payload, dict) else 'Not a dict'}")
+
     try:
+        print("🔄 [API] Calling enhanced_cognitive.analyze_realtime...")
         # The analyzer expects a dict with 'frame' key (data URL)
         summary = await enhanced_cognitive.analyze_realtime(payload)
 
+        print("✅ [API] Enhanced analysis completed successfully!")
+        print(f"📊 [API] Summary keys: {list(summary.keys())}")
+        print(f"📊 [API] Camera enabled: {summary.get('camera_enabled', 'N/A')}")
+        print(f"📊 [API] Metrics keys: {list(summary.get('metrics', {}).keys())}")
+        print(f"📊 [API] Enhanced analysis keys: {list(summary.get('enhanced_analysis', {}).keys())}")
+
         # Best-effort persistence
         try:
+            print("💾 [API] Attempting to persist analysis data...")
             await log_generic('enhanced_analysis', user_id=None, payload={'request': payload, 'summary': summary})
+            print("✅ [API] Analysis data persisted successfully!")
         except Exception as e:
-            logger.debug('Persistence of enhanced analysis failed: %s', e)
+            print(f"⚠️ [API] Persistence failed (non-critical): {e}")
 
-        return {
+        response_data = {
             'success': True,
             'summary': summary
         }
 
+        print("📤 [API] Sending response back to client...")
+        print(f"📤 [API] Response summary keys: {list(response_data['summary'].keys())}")
+
+        return response_data
+
     except Exception as e:
-        logger.error(f'Enhanced analyze endpoint failed: {e}')
+        print(f"❌ [API] Enhanced analyze endpoint failed: {e}")
+        print(f"❌ [API] Error type: {type(e)}")
+        import traceback
+        print(f"❌ [API] Full traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))

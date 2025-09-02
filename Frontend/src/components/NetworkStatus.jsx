@@ -60,8 +60,11 @@ const NetworkStatus = () => {
 
     try {
       const startTime = Date.now()
-      const response = await fetch('/api/health', { 
-        method: 'HEAD',
+      const API_BASE = import.meta.env.VITE_API_URL || ''
+      const healthUrl = API_BASE ? `${API_BASE.replace(/\/$/, '')}/health` : '/api/health'
+      // Use GET for wider compatibility; some servers disallow HEAD
+      const response = await fetch(healthUrl, {
+        method: 'GET',
         cache: 'no-cache'
       })
       const latency = Date.now() - startTime

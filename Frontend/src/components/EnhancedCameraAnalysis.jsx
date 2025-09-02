@@ -4,6 +4,7 @@ import { Camera, Eye, Brain, Heart, Zap, Settings, AlertTriangle, Target, Activi
 import advancedMLService from '../services/advancedMLService'
 import geminiService from '../services/geminiService'
 import enhancedCognitiveAPI from '../services/enhancedCognitive'
+import { expressAPI } from '../services/api'
 import useWebSocket from '../hooks/useWebSocket'
 import useErrorHandler from '../hooks/useErrorHandler'
 
@@ -13,7 +14,7 @@ const EnhancedCameraAnalysis = ({
   onError,
   onAdvancedInsights,
   userProfile = {},
-  onDeviceOnly = true
+  onDeviceOnly = false
 }) => {
   const webcamRef = useRef(null)
   const canvasRef = useRef(null)
@@ -44,7 +45,23 @@ const EnhancedCameraAnalysis = ({
   const [realTimeInsights, setRealTimeInsights] = useState([])
   const [consentGiven, setConsentGiven] = useState(false)
   const [enhancedSummary, setEnhancedSummary] = useState(null)
+  // In-component console for quick visibility of captures/results
+  const [consoleLogs, setConsoleLogs] = useState([])
+  const [submitCount, setSubmitCount] = useState(0)
+  const [lastSubmitStatus, setLastSubmitStatus] = useState(null)
+  const logToConsole = (entry) => {
+    try {
+      const msg = (typeof entry === 'string') ? entry : JSON.stringify(entry)
+      const rec = { t: Date.now(), msg }
+      setConsoleLogs(prev => [...prev.slice(-199), rec])
+      console.log('[EnhancedConsole]', msg)
+    } catch (e) {
+      console.log('[EnhancedConsole] log error', e)
+    }
+  }
+
   const { error, handleAsync, clearError } = useErrorHandler()
+  
 
   const analysisModes = [
     { id: 'basic', label: 'Basic', description: 'Standard emotion and attention tracking' },
@@ -57,6 +74,8 @@ const EnhancedCameraAnalysis = ({
       initializeAdvancedAnalysis()
     }
   }, [isActive, analysisMode])
+
+  
 
   // Attach real camera when consent given
   useEffect(() => {
@@ -104,8 +123,28 @@ const EnhancedCameraAnalysis = ({
     }
   }
 
-  const captureAndAnalyzeAdvanced = useCallback(async () => {
-    if (!isActive || isAnalyzing) return
+
+  const captureAndAnalyzeAdvanced = useCallback(async (force = false) => {
+    if (!isActive && !force) {
+      console.log('📌 [Component] captureAndAnalyzeAdvanced skipped: isActive=false')
+      logToConsole('capture skipped: inactive')
+      return
+    }
+    if (isAnalyzing) {
+      console.log('📌 [Component] captureAndAnalyzeAdvanced skipped: already analyzing')
+      logToConsole('capture skipped: already analyzing')
+      return
+    }
+    // Respect global Express backoff to avoid storming the backend when it replies 429
+    try {
+      const until = (typeof window !== 'undefined' && window.__expressBackoffUntil) || 0
+      if (until && Date.now() < until) {
+        const waitMs = until - Date.now()
+        console.warn(`Global Express backoff active, skipping submit for ${waitMs}ms`)
+        logToConsole(`Global Express backoff active, skipping submit for ${Math.round(waitMs)}ms`)
+        return
+      }
+    } catch (e) {}
     try {
       // Capture image frame from video if available, else fallback to mock
       let imageSrc = null
@@ -113,26 +152,55 @@ const EnhancedCameraAnalysis = ({
         // draw current video frame to canvas and get data URL
         try {
           const v = webcamRef.current
+          console.log("📹 [Component] Video element dimensions:", v.videoWidth, "x", v.videoHeight)
           const c = document.createElement('canvas')
           c.width = v.videoWidth || 640
           c.height = v.videoHeight || 480
+          console.log("📹 [Component] Canvas dimensions:", c.width, "x", c.height)
           const ctx = c.getContext('2d')
           ctx.drawImage(v, 0, 0, c.width, c.height)
           imageSrc = c.toDataURL('image/jpeg')
+          console.log("📹 [Component] Generated data URL length:", imageSrc.length)
+          console.log("📹 [Component] Data URL starts with:", imageSrc.substring(0, 50))
+          logToConsole(`Captured image - length=${imageSrc.length}`)
         } catch (e) {
+          console.error("❌ [Component] Canvas capture failed:", e)
           // ignore and fallback to mock
         }
       }
 
       if (!imageSrc) {
+  console.log("📹 [Component] No camera frame available, using mock image")
+  logToConsole('No camera frame available - using mock image')
         const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='640' height='480'><rect width='100%' height='100%' fill='#ddd'/><text x='50%' y='50%' font-family='Arial' font-size='24' fill='#999' text-anchor='middle' dominant-baseline='middle'>Mock Camera Image</text></svg>`
         imageSrc = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg)
+        console.log("📹 [Component] Mock image data URL length:", imageSrc.length)
       }
+      // If the captured image is clearly a mock (SVG) or extremely small, avoid sending it to the
+      // backend — this causes the server to return neutral placeholders. Show a clear camera
+      // guidance to the user instead.
+      const isMockImage = typeof imageSrc === 'string' && (
+        imageSrc.startsWith('data:image/svg') ||
+        (imageSrc.length && imageSrc.length < 8000)
+      )
+
+      if (isMockImage) {
+        console.warn('\ud83d\udc40 [Component] Detected mock or too-small image; skipping remote enhanced analysis')
+        logToConsole('Detected mock or too-small image; skipping remote enhanced analysis')
+        setCameraError('Real camera frame not available. Please allow camera access and ensure the camera is not used by another application.')
+        // Ensure we don't hold the analyzing flag and abort this cycle early.
+        setIsAnalyzing(false)
+        return
+      }
+
       setIsAnalyzing(true)
       const startTime = Date.now()
 
+      
+
       // If onDeviceOnly, avoid calling remote Python backend and use local/mock analysis only
-      const useRemote = !onDeviceOnly
+      let useRemote = !onDeviceOnly
+      
 
       const tasks = [
         advancedMLService.analyzeEmotionAdvanced(imageSrc)
@@ -144,13 +212,64 @@ const EnhancedCameraAnalysis = ({
       // Add enhanced cognitive analysis if remote is enabled
       let enhancedSummary = null
       if (useRemote) {
+        console.log("🔍 [Component] Starting enhanced cognitive analysis (remote)...")
+        console.log("🔍 [Component] Image source available:", !!imageSrc)
+        console.log("🔍 [Component] Image source type:", typeof imageSrc)
+        console.log("🔍 [Component] Image source length:", imageSrc?.length || 'N/A')
+
+        // First try: submit directly to Express auto-forward endpoint so server-side Gemini handles JSON parsing
         try {
-          const enhancedResult = await enhancedCognitiveAPI.analyze({ frame: imageSrc })
-          enhancedSummary = enhancedResult?.summary || null
-          console.log('Enhanced cognitive summary:', enhancedSummary)
+          logToConsole('Submitting frame to Express auto endpoint')
+          setSubmitCount(c => c + 1)
+          const resp = await expressAPI.post('/api/ai/gemini-auto/submit', { imageData: imageSrc, context: { source: 'frontend-enhanced' } })
+          console.log('🚀 [Component] Express auto submit response:', resp?.data)
+          setLastSubmitStatus({ ok: !!resp?.data?.success, ts: Date.now(), raw: resp?.data })
+          if (resp?.data?.success) {
+            const parsed = resp.data.result?.parsed || null
+            if (parsed) {
+              enhancedSummary = parsed
+              console.log('✅ [Component] Received parsed enhanced summary from Express auto endpoint')
+              logToConsole({ event: 'enhanced_result_auto', parsed })
+            } else {
+              console.warn('⚠️ [Component] Express auto endpoint returned no parsed JSON - falling back to Python analyzer')
+              logToConsole({ event: 'enhanced_auto_no_parsed', raw: resp.data.result?.raw || resp.data })
+              setLastSubmitStatus({ ok: false, ts: Date.now(), raw: resp?.data })
+            }
+          } else {
+            console.warn('⚠️ [Component] Express auto endpoint rejected the frame; falling back to Python analyzer')
+            logToConsole({ event: 'enhanced_auto_failed', resp: resp?.data })
+            setLastSubmitStatus({ ok: false, ts: Date.now(), raw: resp?.data })
+          }
         } catch (err) {
-          console.error('Enhanced cognitive analysis failed:', err)
+          console.warn('⚠️ [Component] Express auto submit failed, will fallback to Python analyzer', err?.message || err)
+          logToConsole({ event: 'enhanced_auto_error', message: err?.message })
+          setLastSubmitStatus({ ok: false, ts: Date.now(), message: err?.message })
         }
+
+        // If Express auto didn't produce a parsed summary, fall back to the Python analyzer as before
+        if (!enhancedSummary) {
+          try {
+            console.log('🚀 [Component] Calling enhancedCognitiveAPI.analyze (Python backend fallback)...')
+            const enhancedResult = await enhancedCognitiveAPI.analyze({ frame: imageSrc })
+            enhancedSummary = enhancedResult?.summary || null
+
+            console.log('✅ [Component] Enhanced cognitive analysis (Python) completed!')
+            console.log('📊 [Component] Enhanced result success:', enhancedResult?.success)
+            console.log('📊 [Component] Enhanced summary keys:', Object.keys(enhancedSummary || {}))
+            console.log('📊 [Component] Enhanced summary:', enhancedSummary)
+            logToConsole({ event: 'enhanced_result_python', success: enhancedResult?.success, summary: enhancedSummary })
+
+            if (enhancedSummary) {
+              console.log('📊 [Component] Camera enabled:', enhancedSummary.camera_enabled)
+            }
+          } catch (err) {
+            console.error('❌ [Component] Enhanced cognitive analysis failed (Python)!', err)
+            logToConsole({ event: 'enhanced_result_python_error', message: err?.message })
+          }
+        }
+
+      } else {
+        console.log('🔍 [Component] Skipping enhanced analysis (onDeviceOnly mode)')
       }
 
       const [emotionResult, attentionResult, fatigueResult] = await Promise.allSettled(tasks)
@@ -164,7 +283,10 @@ const EnhancedCameraAnalysis = ({
 
       // Set enhanced summary if available
       if (enhancedSummary) {
+        console.log("📊 [Component] Setting enhanced summary in state...")
         setEnhancedSummary(enhancedSummary)
+      } else {
+        console.log("📊 [Component] No enhanced summary available")
       }
 
       // Debug logs to verify backend attention flow
@@ -530,10 +652,58 @@ const EnhancedCameraAnalysis = ({
   useEffect(() => {
     let interval
     if (isActive && !cameraError && !error) {
-      interval = setInterval(captureAndAnalyzeAdvanced, 3000) // Analyze every 3 seconds for advanced processing
+      interval = setInterval(captureAndAnalyzeAdvanced, 3000) // Analyze every few seconds
     }
     return () => clearInterval(interval)
   }, [isActive, cameraError, error, captureAndAnalyzeAdvanced])
+
+  // When user clicks "Allow Camera" we want to immediately start the camera and take a single
+  // capture/send. This helper requests media, attaches to the video element, waits for the
+  // video to be ready, then forces a capture cycle.
+  const handleAllowCameraClick = async () => {
+    try {
+      setConsentGiven(true)
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setCameraError('Camera API not available in this browser')
+        return
+      }
+
+      // If a stream is already present, reuse it
+      if (!videoStreamRef.current) {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false })
+        videoStreamRef.current = stream
+        if (webcamRef.current) {
+          webcamRef.current.srcObject = stream
+          try { await webcamRef.current.play?.() } catch(e) { /* ignore play errors */ }
+        }
+      }
+
+      // Wait for the video element to report dimensions or for a short timeout
+      const waitForReady = async (timeoutMs = 2000) => {
+        const start = Date.now()
+        while (Date.now() - start < timeoutMs) {
+          const v = webcamRef.current
+          if (v && (v.videoWidth > 0 || v.readyState >= 2)) return true
+          // small sleep
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise(r => setTimeout(r, 100))
+        }
+        return false
+      }
+
+      const ready = await waitForReady(2500)
+      if (!ready) {
+        console.warn('[Component] Video did not become ready, proceeding to capture anyway')
+      }
+
+      // Trigger a forced capture/send regardless of isActive
+      await captureAndAnalyzeAdvanced(true)
+    } catch (err) {
+      console.error('Failed to start camera and capture:', err)
+      handleCameraError(err)
+    }
+  }
 
   const handleCameraError = useCallback((error) => {
     console.error('Camera error:', error)
@@ -606,6 +776,10 @@ const EnhancedCameraAnalysis = ({
                 {isActive && !error ? 'Active' : 'Inactive'}
               </span>
             </div>
+            <div className="ml-4 text-xs text-gray-500 dark:text-gray-300">
+              <div>Submits: <strong>{submitCount}</strong></div>
+              <div>Last: {lastSubmitStatus ? (lastSubmitStatus.ok ? 'ok' : 'failed') : '—'}</div>
+            </div>
           </div>
         </div>
 
@@ -617,8 +791,35 @@ const EnhancedCameraAnalysis = ({
               <Camera className="w-12 h-12 text-gray-500 mb-2" />
               <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">Camera required for cognitive monitoring.</p>
               <div className="flex items-center gap-2">
-                <button onClick={() => setConsentGiven(true)} className="btn-primary">Allow Camera</button>
+                <button onClick={handleAllowCameraClick} className="btn-primary">Allow Camera</button>
                 <button onClick={() => { setConsentGiven(false); setCameraError('User declined camera access') }} className="btn-ghost">Decline</button>
+              </div>
+              {/* Inline console panel */}
+              <div className="p-4 border-t bg-gray-50 dark:bg-gray-800">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-sm font-medium text-gray-700 dark:text-gray-200">Capture Console</div>
+                  <div>
+                      <button onClick={() => setConsoleLogs([])} className="text-xs btn-ghost">Clear</button>
+                      <button onClick={async () => {
+                        try {
+                          await expressAPI.debugEcho({ ping: 'capture_console', ts: Date.now() })
+                          logToConsole('Debug echo succeeded')
+                        } catch (e) {
+                          logToConsole('Debug echo failed')
+                        }
+                        captureAndAnalyzeAdvanced()
+                      }} className="ml-2 text-xs btn-primary">Send Now</button>
+                  </div>
+                </div>
+                <div className="h-40 overflow-auto text-xs font-mono bg-white dark:bg-gray-900 p-2 rounded">
+                  {consoleLogs.length === 0 ? (
+                    <div className="text-gray-500">No logs yet</div>
+                  ) : (
+                    consoleLogs.slice().reverse().map((l, i) => (
+                      <div key={i} className="mb-1 text-gray-800 dark:text-gray-200">{new Date(l.t).toLocaleTimeString()} • {l.msg}</div>
+                    ))
+                  )}
+                </div>
               </div>
             </div>
           ) : (
@@ -650,6 +851,8 @@ const EnhancedCameraAnalysis = ({
               </div>
             </div>
           )}
+
+          
           
           {/* Real-time Insights Overlay */}
           {realTimeInsights.length > 0 && (
@@ -855,6 +1058,8 @@ const EnhancedCameraAnalysis = ({
           </div>
         </div>
       </div>
+
+      
     </div>
   )
 }

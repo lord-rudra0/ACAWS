@@ -34,6 +34,9 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
+# Path to last decoded image (for debugging)
+LAST_DECODED_IMAGE = None
+
 try:
     import cv2
 except Exception:
@@ -178,23 +181,69 @@ class CognitiveState:
 
 def _decode_frame_dataurl(dataurl: str) -> Optional[np.ndarray]:
     if not dataurl:
+        print("❌ [DECODE] No data URL provided")
         return None
+        if not dataurl or not isinstance(dataurl, str):
+            print('❌ [ENHANCED_COGNITIVE] No data URL provided to decode')
+            return None
+
+        # Log basic metadata to help track whether frontend is sending real camera frames
+        try:
+            prefix = dataurl[:64]
+            print(f"🔎 [ENHANCED_COGNITIVE] Received dataurl length={len(dataurl)} prefix={prefix}")
+        except Exception:
+            print('🔎 [ENHANCED_COGNITIVE] Received dataurl (could not read prefix)')
     try:
+        print(f"🔍 [DECODE] Original data URL length: {len(dataurl)}")
+        print(f"🔍 [DECODE] Data URL starts with: {dataurl[:50]}...")
+
         # strip header if present
         if dataurl.startswith('data:'):
+            print("🔍 [DECODE] Stripping data URL header")
             data = dataurl.split(',', 1)[1]
         else:
+            print("🔍 [DECODE] No data URL header found")
             data = dataurl
 
+        print(f"🔍 [DECODE] Base64 data length: {len(data)}")
+        print(f"🔍 [DECODE] Base64 data starts with: {data[:50]}...")
+
         b = base64.b64decode(data)
+        print(f"🔍 [DECODE] Decoded bytes length: {len(b)}")
+
         arr = np.frombuffer(b, dtype=np.uint8)
+        print(f"🔍 [DECODE] NumPy array shape: {arr.shape}")
+
         if cv2 is None:
-            logger.debug('cv2 not available; cannot decode image to ndarray')
+            print("❌ [DECODE] cv2 not available; cannot decode image to ndarray")
             return None
+
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        print(f"🔍 [DECODE] cv2.imdecode result: {img is not None}")
+
+        if img is not None:
+            print(f"🔍 [DECODE] Image shape: {img.shape}")
+            print(f"🔍 [DECODE] Image dtype: {img.dtype}")
+            # Persist decoded image to /tmp for offline inspection
+            try:
+                import os
+                global LAST_DECODED_IMAGE
+                ts = int(time.time() * 1000)
+                out_path = f"/tmp/enhanced_decoded_{ts}.jpg"
+                cv2.imwrite(out_path, img)
+                LAST_DECODED_IMAGE = out_path
+                print(f"🔍 [DECODE] Saved decoded image to: {out_path}")
+            except Exception as e:
+                print(f"❌ [DECODE] Failed to persist decoded image: {e}")
+        else:
+            print("❌ [DECODE] cv2.imdecode returned None")
+
         return img
     except Exception as e:
-        logger.debug('Failed to decode frame data: %s', e)
+        print(f"❌ [DECODE] Failed to decode frame data: {e}")
+        print(f"❌ [DECODE] Error type: {type(e)}")
+        import traceback
+        print(f"❌ [DECODE] Full traceback: {traceback.format_exc()}")
         return None
 
 def _calculate_distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
@@ -548,11 +597,17 @@ class AdvancedCognitiveAnalyzer:
 
     async def analyze_realtime(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Advanced real-time cognitive analysis with ML features"""
+        print("🔍 [ENHANCED_COGNITIVE] Starting analyze_realtime...")
+        print(f"🔍 [ENHANCED_COGNITIVE] Payload keys: {list(payload.keys()) if isinstance(payload, dict) else 'Not a dict'}")
+
         frame_b64 = payload.get('frame') if isinstance(payload, dict) else None
         img = _decode_frame_dataurl(frame_b64)
 
         camera_enabled = False
         cognitive_state = CognitiveState()
+
+        print(f"🔍 [ENHANCED_COGNITIVE] Frame decoded: {img is not None}")
+        print(f"🔍 [ENHANCED_COGNITIVE] MediaPipe available: {_HAS_MEDIAPIPE}")
 
         # Initialize enhanced analysis results
         enhanced_results = {
@@ -571,6 +626,7 @@ class AdvancedCognitiveAnalyzer:
 
                 # Advanced MediaPipe analysis
                 if _HAS_MEDIAPIPE and mp_face_mesh is not None:
+                    print("🔍 [ENHANCED_COGNITIVE] MediaPipe available, starting face mesh analysis...")
                     try:
                         with mp_face_mesh.FaceMesh(
                             static_image_mode=True,
@@ -578,63 +634,83 @@ class AdvancedCognitiveAnalyzer:
                             min_detection_confidence=0.5,
                             min_tracking_confidence=0.5
                         ) as fm:
+                            print("🔍 [ENHANCED_COGNITIVE] FaceMesh initialized, processing frame...")
                             results = fm.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+
+                            print(f"🔍 [ENHANCED_COGNITIVE] FaceMesh results: {results is not None}")
+                            if results:
+                                print(f"🔍 [ENHANCED_COGNITIVE] Multi face landmarks: {results.multi_face_landmarks is not None}")
+                                if results.multi_face_landmarks:
+                                    print(f"🔍 [ENHANCED_COGNITIVE] Number of faces detected: {len(results.multi_face_landmarks)}")
 
                             if results and results.multi_face_landmarks:
                                 camera_enabled = True
+                                print("✅ [ENHANCED_COGNITIVE] Face detected! Processing landmarks...")
                                 landmarks = results.multi_face_landmarks[0].landmark
 
                                 # Extract comprehensive facial features
                                 features = _extract_facial_features(landmarks, img.shape)
+                                print(f"🔍 [ENHANCED_COGNITIVE] Facial features extracted: {features.eye_aspect_ratio:.3f} EAR")
 
                                 # Detect blinks
                                 blink_detected = self._detect_blink(features)
                                 self.temporal_metrics.update_blink(blink_detected)
+                                print(f"🔍 [ENHANCED_COGNITIVE] Blink detected: {blink_detected}")
 
                                 # Analyze emotion
                                 emotion, confidence = _analyze_emotion_from_features(features)
                                 cognitive_state.emotional_state = emotion
                                 cognitive_state.emotional_confidence = confidence
                                 self.temporal_metrics.update_emotion(emotion, confidence)
+                                print(f"🔍 [ENHANCED_COGNITIVE] Emotion analysis: {emotion} ({confidence:.2f})")
 
                                 # Calculate attention score
                                 attention = _calculate_attention_score(features, self.temporal_metrics)
                                 cognitive_state.attention_score = attention
                                 self.temporal_metrics.update_attention(attention)
                                 self._update_baseline(attention)
+                                print(f"🔍 [ENHANCED_COGNITIVE] Attention score: {attention:.1f}")
 
                                 # Calculate cognitive load
                                 cognitive_load = _calculate_cognitive_load(features, self.temporal_metrics)
                                 cognitive_state.cognitive_load = cognitive_load
+                                print(f"🔍 [ENHANCED_COGNITIVE] Cognitive load: {cognitive_load:.1f}")
 
                                 # Calculate drowsiness
                                 drowsiness = _calculate_drowsiness(features, self.temporal_metrics)
                                 cognitive_state.drowsiness_level = drowsiness
+                                print(f"🔍 [ENHANCED_COGNITIVE] Drowsiness: {drowsiness:.1f}")
 
                                 # Calculate engagement (combination of attention and emotional engagement)
                                 engagement = (attention * 0.7 + (confidence * 100) * 0.3)
                                 cognitive_state.engagement_level = engagement
+                                print(f"🔍 [ENHANCED_COGNITIVE] Engagement: {engagement:.1f}")
 
                                 # Focus quality (based on gaze stability and attention consistency)
                                 focus_quality = attention * (1 - min(1.0, np.std(list(self.temporal_metrics.attention_history)[-10:]) / 20)) if len(self.temporal_metrics.attention_history) > 10 else attention
                                 cognitive_state.focus_quality = focus_quality
+                                print(f"🔍 [ENHANCED_COGNITIVE] Focus quality: {focus_quality:.1f}")
 
                                 # Stress indicators (based on cognitive load and emotional variance)
                                 stress = cognitive_load * 0.6 + (1 - self.temporal_metrics.get_emotion_stability()) * 40
                                 cognitive_state.stress_indicators = stress
+                                print(f"🔍 [ENHANCED_COGNITIVE] Stress indicators: {stress:.1f}")
 
                                 # Learning readiness (inverse of cognitive load and stress)
                                 readiness = 100 - (cognitive_load * 0.5 + stress * 0.3 + drowsiness * 0.2)
                                 cognitive_state.learning_readiness = max(0, readiness)
+                                print(f"🔍 [ENHANCED_COGNITIVE] Learning readiness: {readiness:.1f}")
 
                                 # Micro-expressions detection (simplified)
                                 if features.smile_intensity > 0.05 and confidence > 0.7:
                                     cognitive_state.micro_expressions.append("genuine_smile")
                                 if features.eyebrow_raise > 0.04:
                                     cognitive_state.micro_expressions.append("surprise_micro")
+                                print(f"🔍 [ENHANCED_COGNITIVE] Micro-expressions: {cognitive_state.micro_expressions}")
 
                                 # Overall confidence score
                                 cognitive_state.confidence_score = min(0.95, (confidence + 0.8) / 2)
+                                print(f"🔍 [ENHANCED_COGNITIVE] Confidence score: {cognitive_state.confidence_score:.2f}")
 
                                 # Update head pose history
                                 self.temporal_metrics.update_head_pose(
@@ -645,19 +721,25 @@ class AdvancedCognitiveAnalyzer:
 
                                 # Integrate additional services if available
                                 if _HAS_ADDITIONAL_SERVICES:
+                                    print("🔍 [ENHANCED_COGNITIVE] Additional services available, integrating...")
                                     try:
                                         # Gaze tracking analysis
                                         if gaze_tracker:
+                                            print("🔍 [ENHANCED_COGNITIVE] Running gaze tracking...")
                                             gaze_result = await gaze_tracker.analyze_gaze(frame_b64, landmarks)
                                             enhanced_results['gaze_analysis'] = gaze_result
+                                            print(f"🔍 [ENHANCED_COGNITIVE] Gaze result: {gaze_result}")
 
                                         # Advanced emotion analysis
                                         if emotion_recognizer:
+                                            print("🔍 [ENHANCED_COGNITIVE] Running advanced emotion analysis...")
                                             emotion_result = await emotion_recognizer.analyze_emotion(frame_b64, landmarks)
                                             enhanced_results['advanced_emotion'] = emotion_result
+                                            print(f"🔍 [ENHANCED_COGNITIVE] Advanced emotion result: {emotion_result}")
 
                                         # Update temporal analyzer with current metrics
                                         if temporal_analyzer:
+                                            print("🔍 [ENHANCED_COGNITIVE] Running temporal analysis...")
                                             current_metrics = {
                                                 'attention': attention,
                                                 'engagement': engagement,
@@ -672,26 +754,37 @@ class AdvancedCognitiveAnalyzer:
                                             temporal_analyzer.add_metrics(current_metrics)
                                             temporal_result = temporal_analyzer.analyze_temporal_patterns()
                                             enhanced_results['temporal_analysis'] = temporal_result
+                                            print(f"🔍 [ENHANCED_COGNITIVE] Temporal analysis result: {temporal_result}")
 
                                         # Performance metrics
                                         if performance_service:
+                                            print("🔍 [ENHANCED_COGNITIVE] Running performance metrics...")
                                             performance_service.record_performance_metric('attention', attention / 100.0)
                                             performance_service.record_performance_metric('engagement', engagement / 100.0)
                                             performance_service.record_performance_metric('cognitive_load', cognitive_load / 100.0)
                                             perf_result = performance_service.calculate_realtime_metrics()
                                             enhanced_results['performance_metrics'] = perf_result
+                                            print(f"🔍 [ENHANCED_COGNITIVE] Performance metrics result: {perf_result}")
 
                                     except Exception as e:
-                                        logger.debug(f'Enhanced services integration failed: {e}')
+                                        print(f"❌ [ENHANCED_COGNITIVE] Enhanced services integration failed: {e}")
 
                     except Exception as e:
-                        logger.debug(f'MediaPipe advanced analysis failed: {e}')
+                        print(f"❌ [ENHANCED_COGNITIVE] MediaPipe advanced analysis failed: {e}")
 
                 # Fallback: OpenCV face detector
                 if not camera_enabled and self.face_cascade is not None and gray is not None:
+                    print("🔍 [ENHANCED_COGNITIVE] Using OpenCV fallback face detection...")
                     faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+                    print(f"🔍 [ENHANCED_COGNITIVE] OpenCV detected {len(faces)} faces")
+                    if len(faces) == 0:
+                        try:
+                            print(f"🔍 [ENHANCED_COGNITIVE] Last decoded image path: {LAST_DECODED_IMAGE}")
+                        except Exception:
+                            pass
                     if len(faces) > 0:
                         camera_enabled = True
+                        print("✅ [ENHANCED_COGNITIVE] OpenCV face detected!")
                         # Basic fallback metrics
                         x, y, w, h = faces[0]
                         face_area = w * h
@@ -705,13 +798,18 @@ class AdvancedCognitiveAnalyzer:
                         cognitive_state.emotional_state = 'neutral'
                         cognitive_state.emotional_confidence = 0.5
                         cognitive_state.confidence_score = 0.6
+                        print(f"🔍 [ENHANCED_COGNITIVE] OpenCV fallback metrics - Attention: {attention}%")
 
         except Exception as e:
-            logger.debug(f'Enhanced analysis error: {e}')
+            print(f"❌ [ENHANCED_COGNITIVE] Enhanced analysis error: {e}")
 
         # Create comprehensive summary
+        print(f"🔍 [ENHANCED_COGNITIVE] Creating summary - camera_enabled: {camera_enabled}")
         attention_trend = self.temporal_metrics.get_attention_trend()
         blink_rate = self.temporal_metrics.get_blink_rate()
+
+        print(f"🔍 [ENHANCED_COGNITIVE] Attention trend: {attention_trend}, Blink rate: {blink_rate:.1f}")
+        print(f"🔍 [ENHANCED_COGNITIVE] Cognitive state - attention: {cognitive_state.attention_score:.1f}, emotion: {cognitive_state.emotional_state}")
 
         summary = {
             'camera_enabled': bool(camera_enabled),
@@ -777,6 +875,12 @@ class AdvancedCognitiveAnalyzer:
             'enhanced_analysis': enhanced_results,
             'human_readable': f'Advanced cognitive analysis completed - {cognitive_state.emotional_state} emotion detected with {int(cognitive_state.confidence_score * 100)}% confidence',
         }
+
+        print("✅ [ENHANCED_COGNITIVE] Analysis complete!")
+        print(f"📊 [ENHANCED_COGNITIVE] Final summary keys: {list(summary.keys())}")
+        print(f"📊 [ENHANCED_COGNITIVE] Camera enabled: {summary['camera_enabled']}")
+        print(f"📊 [ENHANCED_COGNITIVE] Attention metric: {summary['metrics']['attention']}")
+        print(f"📊 [ENHANCED_COGNITIVE] Enhanced analysis keys: {list(summary['enhanced_analysis'].keys())}")
 
         return summary
 
