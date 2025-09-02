@@ -3,6 +3,7 @@ import aiOrchestrator from '../services/aiOrchestrator'
 import intelligentTutoringService from '../services/intelligentTutoring'
 import geminiService from '../services/geminiService'
 import advancedMLService from '../services/advancedMLService'
+import { pythonAPI, analyticsAPI } from '../services/api'
 
 export const useAIFeatures = (userId, initialContext = {}) => {
   const [aiState, setAiState] = useState({
@@ -362,16 +363,35 @@ export const useAIFeatures = (userId, initialContext = {}) => {
 
   const generateRealTimeInsights = useCallback(async (currentState) => {
     try {
+      // First try the backend cognitive monitor if available
+      let monitorResult = null
+      try {
+        const resp = await pythonAPI.post('/api/analytics/monitor/analyze', {
+          user_id: currentState.userId || 'anonymous',
+          signals: currentState.signals || currentState,
+          metadata: { source: 'frontend' }
+        })
+        monitorResult = resp?.summary || resp?.data?.summary || null
+      } catch (err) {
+        // backend may be unavailable; fall back to local generation
+        console.warn('Cognitive monitor API unavailable, falling back to local insights', err)
+      }
+
+      const remoteInsights = monitorResult ? [ { message: JSON.stringify(monitorResult), confidence: 0.9 } ] : []
+
+      // Also call gemini fallback for richer content when needed
       const insights = await geminiService.generateWellnessInsights(
         { currentState },
         [currentState]
       )
+
       // Normalize to array to avoid TypeError and incorrect spread
       const raw = insights?.insights
       const list = Array.isArray(raw) ? raw : (raw ? [raw] : [])
-      setAiInsights(prev => [...prev.slice(-9), ...list])
+      const merged = [...remoteInsights, ...list]
+      setAiInsights(prev => [...prev.slice(-9), ...merged])
       
-      return { ...insights, insights: list }
+      return { ...insights, insights: merged }
     } catch (error) {
       console.error('Real-time insights generation failed:', error)
       return { insights: [] }

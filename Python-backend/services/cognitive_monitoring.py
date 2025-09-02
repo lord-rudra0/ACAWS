@@ -184,7 +184,7 @@ class CognitiveMonitor:
             "human_readable": {
                 "title": "Enhanced Cognitive Analysis",
                 "subtitle": "AI-powered real-time cognitive monitoring",
-+                "description": "Comprehensive\nInactive\nCamera required for cognitive monitoring."
+                "description": "Comprehensive\nInactive\nCamera required for cognitive monitoring."
             }
         }
 

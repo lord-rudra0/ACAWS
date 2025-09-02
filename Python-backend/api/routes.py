@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 import logging
 from datetime import datetime
 import os
+import asyncio
 
 # Import services or use lightweight stubs in minimal boot
 MINIMAL_BOOT = os.getenv("MINIMAL_BOOT", "false").lower() == "true"
@@ -16,6 +17,7 @@ if not MINIMAL_BOOT:
     from services.adaptive_learning_service import AdaptiveLearningService
     from services.wellness_service import WellnessService
     from services.wellness_ml_model import wellness_ml_model
+    from services.cognitive_monitoring import cognitive_monitor
 else:
     # Lightweight stubs to avoid heavy deps in minimal boot
     class EmotionAnalysisService:
@@ -55,6 +57,20 @@ else:
 
         async def generate_wellness_insights(self, user_id: str):
             return {"summary": {"mood": 7.0, "stress": 3.5, "energy": 7.5}}
+
+    # Minimal stub for cognitive monitoring in MINIMAL_BOOT mode
+    class _StubCognitiveMonitor:
+        def analyze_realtime(self, payload: Dict):
+            # return a tiny plausible summary so frontend can render
+            return {
+                "summary": {
+                    "attention": {"quality": "unknown", "current": 0.5, "percent": "50%"},
+                    "engagement": {"quality": "unknown", "current": 0.5, "percent": "50%"},
+                    "cognitive_load": {"quality": "unknown", "current": 0.5, "percent": "50%"}
+                }
+            }
+
+    cognitive_monitor = _StubCognitiveMonitor()
 
 # Authentication removed for development: verify_token intentionally not used
 from database.connection import get_db
@@ -101,6 +117,13 @@ class CognitiveState(BaseModel):
     confusion: float
     engagement: float
     fatigue: float
+
+
+class RealtimeSignals(BaseModel):
+    user_id: Optional[str] = None
+    timestamp: Optional[str] = None
+    signals: Dict = {}
+    metadata: Optional[Dict] = {}
 
 # Emotion Analysis Routes
 @emotion_router.post("/analyze")
@@ -625,4 +648,30 @@ async def generate_analytics_report(
         
     except Exception as e:
         logger.error(f"Report generation endpoint failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Cognitive monitoring route: frontend POSTs realtime signals, gets summary
+@analytics_router.post("/monitor/analyze")
+async def analyze_cognitive_realtime(payload: RealtimeSignals):
+    try:
+        user_id = payload.user_id or "anonymous"
+        # call the cognitive monitor (sync or async)
+        if asyncio.iscoroutinefunction(getattr(cognitive_monitor, 'analyze_realtime', None)):
+            summary = await cognitive_monitor.analyze_realtime(payload.dict())
+        else:
+            # run sync in threadpool to avoid blocking
+            loop = asyncio.get_running_loop()
+            summary = await loop.run_in_executor(None, cognitive_monitor.analyze_realtime, payload.dict())
+
+        # Persist the raw payload and summary for analytics (best-effort)
+        try:
+            await log_generic("cognitive_monitor", user_id=user_id, payload={"input": payload.dict(), "summary": summary})
+        except Exception as e:
+            logger.error("Cognitive monitor persistence failed: %s", str(e))
+
+        return {"success": True, "user_id": user_id, "summary": summary}
+
+    except Exception as e:
+        logger.error(f"Cognitive realtime analysis failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
