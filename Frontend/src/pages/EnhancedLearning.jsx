@@ -29,7 +29,7 @@ import PredictiveAnalytics from '../components/PredictiveAnalytics'
 import useAIFeatures from '../hooks/useAIFeatures'
 import { useAuth } from '../contexts/AuthContext'
 import geminiService from '../services/geminiService'
-import { learningAPI, wellnessAPI, analyticsAPI } from '../services/api'
+import { learningAPI, wellnessAPI, analyticsAPI, pythonAPI } from '../services/api'
 import { userAPI } from '../services/api'
 import { Camera as CameraIcon } from 'lucide-react'
 
@@ -41,6 +41,35 @@ const generateAvatarDataUrl = (text = '', size = 64) => {
   const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}'><rect width='100%' height='100%' fill='${bg}' rx='8' ry='8'/><text x='50%' y='55%' font-size='28' font-family='Inter, Roboto, sans-serif' fill='white' text-anchor='middle' dominant-baseline='middle'>${initials}</text></svg>`
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
 }
+
+// Reusable button components for consistent UI
+const PrimaryBtn = ({ children, className = '', ...props }) => (
+  <button
+    className={`inline-flex items-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-400 ${className}`}
+    {...props}
+  >
+    {children}
+  </button>
+)
+
+const SecondaryBtn = ({ children, className = '', ...props }) => (
+  <button
+    className={`inline-flex items-center rounded-md bg-gray-100 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 ${className}`}
+    {...props}
+  >
+    {children}
+  </button>
+)
+
+const IconBtn = ({ children, className = '', 'aria-label': ariaLabel = '', ...props }) => (
+  <button
+    aria-label={ariaLabel}
+    className={`inline-flex items-center justify-center rounded-md p-2 text-sm text-white bg-primary-500 hover:bg-primary-600 focus:outline-none focus:ring-2 focus:ring-indigo-400 ${className}`}
+    {...props}
+  >
+    {children}
+  </button>
+)
 
 const EnhancedLearning = () => {
   const { user } = useAuth()
@@ -99,6 +128,11 @@ const EnhancedLearning = () => {
   const [newModuleDifficulty, setNewModuleDifficulty] = useState('beginner')
   const [newModuleDuration, setNewModuleDuration] = useState('60 min')
 
+  // Modal form state to create a module when no module is selected
+  const [showCreateModuleModal, setShowCreateModuleModal] = useState(false)
+  // pendingAction holds the action to execute after creating/selecting a module
+  const [pendingAction, setPendingAction] = useState(null)
+
   const [autoSuggestEnabled, setAutoSuggestEnabled] = useState(() => {
     try { return JSON.parse(localStorage.getItem('el:autoSuggest')) ?? true } catch { return true }
   })
@@ -109,6 +143,9 @@ const EnhancedLearning = () => {
   const [predictionResult, setPredictionResult] = useState(null)
   const [showPredictionExplanation, setShowPredictionExplanation] = useState(false)
   const [lastSavedModuleId, setLastSavedModuleId] = useState(null)
+  const [recommendation, setRecommendation] = useState(null)
+  const [recLoading, setRecLoading] = useState(false)
+  const [showRecDetails, setShowRecDetails] = useState(false)
 
   useEffect(() => {
     // Load persisted modules from backend on mount
@@ -286,7 +323,9 @@ const EnhancedLearning = () => {
 
   const handleQuickMicroQuiz = async () => {
     if (!currentModule) {
-      if (window.toast) window.toast.info('Select a module first')
+      // open create-module modal and remember to continue this action
+      setPendingAction('quickMicroQuiz')
+      setShowCreateModuleModal(true)
       return
     }
     setQuickActionLoading(true)
@@ -304,7 +343,8 @@ const EnhancedLearning = () => {
 
   const handleLowerDifficulty = async () => {
     if (!currentModule) {
-      if (window.toast) window.toast.info('Select a module first')
+      setPendingAction('lowerDifficulty')
+      setShowCreateModuleModal(true)
       return
     }
     setQuickActionLoading(true)
@@ -347,7 +387,8 @@ const EnhancedLearning = () => {
 
   const handleRegenerateContent = async () => {
     if (!currentModule) {
-      if (window.toast) window.toast.info('Select a module first')
+      setPendingAction('regenerateContent')
+      setShowCreateModuleModal(true)
       return
     }
     setQuickActionLoading(true)
@@ -398,6 +439,60 @@ const EnhancedLearning = () => {
       ...prev,
       aiInteractions: prev.aiInteractions + 1
     }))
+  }
+
+  // Create module from modal and optionally continue pending action
+  const submitCreateModuleFromModal = async () => {
+    if (!newModuleTitle || !newModuleTitle.trim()) {
+      if (window.toast) window.toast.info('Please enter a module title')
+      return
+    }
+
+    const modulePayload = {
+      title: newModuleTitle.trim(),
+      description: 'User added module',
+      category: 'user',
+      difficulty: newModuleDifficulty,
+      duration: parseInt(newModuleDuration) || 60,
+      topics: []
+    }
+
+    try {
+      const resp = await learningAPI.createModule(modulePayload)
+      let created
+      if (resp && resp.module) {
+        created = resp.module
+        setModules(prev => [...prev, resp.module])
+      } else {
+        created = { id: Date.now(), title: modulePayload.title, description: modulePayload.description, difficulty: modulePayload.difficulty, duration: modulePayload.duration }
+        setModules(prev => [...prev, created])
+      }
+
+      // set as current module and close modal
+      setCurrentModule(created)
+      setShowCreateModuleModal(false)
+      setPendingAction(null)
+
+      // Small delay to ensure state is applied before invoking the pending action
+      setTimeout(() => {
+        if (pendingAction === 'quickMicroQuiz') handleQuickMicroQuiz()
+        if (pendingAction === 'lowerDifficulty') handleLowerDifficulty()
+        if (pendingAction === 'regenerateContent') handleRegenerateContent()
+      }, 100)
+    } catch (err) {
+      console.error('Create module failed:', err)
+      // fallback: create locally
+      const created = { id: Date.now(), title: modulePayload.title, description: modulePayload.description, difficulty: modulePayload.difficulty, duration: modulePayload.duration }
+      setModules(prev => [...prev, created])
+      setCurrentModule(created)
+      setShowCreateModuleModal(false)
+      setPendingAction(null)
+      setTimeout(() => {
+        if (pendingAction === 'quickMicroQuiz') handleQuickMicroQuiz()
+        if (pendingAction === 'lowerDifficulty') handleLowerDifficulty()
+        if (pendingAction === 'regenerateContent') handleRegenerateContent()
+      }, 100)
+    }
   }
 
   // record prediction into session history for later review
@@ -497,7 +592,19 @@ const EnhancedLearning = () => {
       console.error('Session summary generation failed:', error)
     }
     
-    setCurrentModule(null)
+    // After session ends, request a model-backed recommendation automatically
+    try {
+      const rec = await requestModelRecommendation()
+      if (rec) {
+        // allow small delay for UI consistency
+        setTimeout(() => setCurrentModule(null), 300)
+      } else {
+        setCurrentModule(null)
+      }
+    } catch (e) {
+      setCurrentModule(null)
+    }
+
     setSessionTime(0)
   }
 
@@ -613,6 +720,207 @@ const EnhancedLearning = () => {
     }
   }
 
+  // Request model-backed recommendation from Python backend
+  // small spinner SVG used by buttons
+  const Spinner = ({ className = 'w-4 h-4 text-white' }) => (
+    <svg className={`${className} animate-spin`} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 11-8 8z"></path>
+    </svg>
+  )
+
+  const ConfidenceBar = ({ value = 0 }) => {
+    const pct = Math.max(0, Math.min(100, Math.round((value || 0) * 100)))
+    return (
+      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+        <div className="h-2 rounded-full bg-green-500" style={{ width: `${pct}%` }} />
+      </div>
+    )
+  }
+
+  // Build feature vector matching the training-time tokens used by the backend pipeline.
+  // This creates numeric tokens prefixed with `num__` and one-hot categorical tokens `cat__<field>_<value>`.
+  const buildModelFeatures = (rawDefaults = {}, perf = {}) => {
+    const features = {}
+
+    // numeric fields to prefix with num__
+    const numericFields = ['age','Medu','Fedu','traveltime','studytime','failures','famrel','freetime','goout','Dalc','Walc','health','absences']
+    numericFields.forEach(f => {
+      const v = rawDefaults[f]
+      features[`num__${f}`] = v == null || v === '' ? 0 : Number(v)
+    })
+
+    // map performance metrics to numeric tokens as well
+    features['num__score'] = Number(perf.score ?? perf.score_percentage ?? 0)
+    features['num__time_taken'] = Number(perf.time_taken ?? perf.duration_seconds ?? 0)
+    features['num__mistake_count'] = Number(perf.mistake_count ?? perf.mistakes ?? 0)
+
+    // categorical fields and a small catalog of their expected tokens (best-effort)
+    const categoricalOptions = {
+      school: ['GP','MS'],
+      sex: ['F','M'],
+      address: ['U','R'],
+      famsize: ['GT3','LE3'],
+      Pstatus: ['T','A'],
+      Mjob: ['at_home','health','services','teacher','other'],
+      Fjob: ['at_home','health','services','teacher','other'],
+      reason: ['home','reputation','course','other'],
+      guardian: ['mother','father','other'],
+      schoolsup: ['yes','no'],
+      famsup: ['yes','no'],
+      paid: ['yes','no'],
+      activities: ['yes','no'],
+      nursery: ['yes','no'],
+      higher: ['yes','no'],
+      internet: ['yes','no'],
+      romantic: ['yes','no']
+    }
+
+    Object.entries(categoricalOptions).forEach(([field, opts]) => {
+      const val = (rawDefaults[field] ?? '').toString()
+      opts.forEach(opt => {
+        const key = `cat__${field}_${opt}`
+        features[key] = val === opt ? 1 : 0
+      })
+    })
+
+    // include some context tokens for module / session as fallback simple features
+    if (currentModule?.difficulty) {
+      const diff = currentModule.difficulty.toString().toLowerCase()
+      features[`cat__module_difficulty_${diff}`] = 1
+    }
+
+    // Keep raw perf for debugging on server
+    features['raw_performance_json'] = JSON.stringify(perf || {})
+
+    return features
+  }
+
+  const requestModelRecommendation = async () => {
+    setRecLoading(true)
+    try {
+      // Build raw feature defaults expected by backend pipeline (best-effort from user profile)
+      const rawDefaults = {
+        age: user?.age ?? 16,
+        Medu: user?.Medu ?? 2,
+        Fedu: user?.Fedu ?? 2,
+        traveltime: 1,
+        studytime: 2,
+        failures: 0,
+        famrel: 4,
+        freetime: 3,
+        goout: 3,
+        Dalc: 1,
+        Walc: 1,
+        health: 5,
+        absences: 0,
+        school: user?.school ?? 'GP',
+        sex: user?.sex ?? (user?.gender || 'F'),
+        address: user?.address ?? 'U',
+        famsize: user?.famsize ?? 'GT3',
+        Pstatus: user?.Pstatus ?? 'T',
+        Mjob: user?.Mjob ?? 'at_home',
+        Fjob: user?.Fjob ?? 'teacher',
+        reason: user?.reason ?? 'course',
+        guardian: user?.guardian ?? 'mother',
+        schoolsup: user?.schoolsup ?? 'no',
+        famsup: user?.famsup ?? 'no',
+        paid: user?.paid ?? 'no',
+        activities: user?.activities ?? 'yes',
+        nursery: user?.nursery ?? 'yes',
+        higher: user?.higher ?? 'yes',
+        internet: user?.internet ?? 'yes',
+        romantic: user?.romantic ?? 'no'
+      }
+
+      // runtime session metrics
+      const perf = {
+        score: learningMetrics.averageScore ?? 0,
+        time_taken: sessionTime ?? 0,
+        mistake_count: sessionAnalytics.performanceHistory?.slice(-1)?.[0]?.mistakes ?? 0
+      }
+
+      // normalize keys to lowercase as before
+      const perfNormalized = {}
+      Object.entries(perf).forEach(([k,v]) => { perfNormalized[String(k).toLowerCase()] = v })
+
+      // build model-ready features
+      const modelFeatures = buildModelFeatures(rawDefaults, perfNormalized)
+
+      const payload = {
+        user_id: user?.id || null,
+        // send the model-ready feature tokens in `performance` so backend can feed the pipeline directly
+        performance: modelFeatures,
+        raw_performance: perfNormalized,
+        cognitive_history: sessionAnalytics.cognitiveHistory?.slice(-100) || [],
+        current_module: currentModule ? { id: currentModule.id, title: currentModule.title, difficulty: currentModule.difficulty } : null
+      }
+
+      // POST to python recommendation endpoint
+      const resp = await pythonAPI.post('/api/learning/recommend', payload)
+      if (resp && resp.data) {
+        setRecommendation(resp.data.recommendation || resp.data)
+      }
+      return resp?.data
+    } catch (err) {
+      console.error('Model recommendation failed:', err)
+      return null
+    } finally {
+      setRecLoading(false)
+    }
+  }
+
+  // Apply a recommendation action to the UI / session
+  const handleApplyRecommendation = (rec) => {
+    if (!rec) return
+    const r = rec?.recommendation ?? rec?.data?.recommendation ?? rec
+    const action = r?.action || r?.type || null
+    const specific = r?.specific || null
+
+    // Map known actions to handlers
+    switch (action) {
+      case 'break':
+      case 'take_break':
+        if (window.toast) window.toast.info('Scheduling short break...')
+        handleShortBreathingBreak()
+        break
+      case 'lower_difficulty':
+      case 'easier':
+        if (window.toast) window.toast.info('Applying lower difficulty...')
+        handleLowerDifficulty()
+        break
+      case 'review':
+      case 'open_review':
+        if (window.toast) window.toast.info('Opening review content...')
+        // attempt to locate module by id or title
+        if (specific) {
+          const target = modules.find(m => String(m.id) === String(specific) || (m.title && m.title.toLowerCase().includes(String(specific).toLowerCase())))
+          if (target) {
+            setCurrentModule(target)
+            if (window.toast) window.toast.success(`Opened module: ${target.title}`)
+            return
+          }
+        }
+        if (window.toast) window.toast.success('Review suggestion applied')
+        break
+      case 'open_content':
+      case 'open_module':
+        if (specific) {
+          const target2 = modules.find(m => String(m.id) === String(specific) || (m.title && m.title.toLowerCase().includes(String(specific).toLowerCase())))
+          if (target2) {
+            setCurrentModule(target2)
+            if (window.toast) window.toast.success(`Opened module: ${target2.title}`)
+            return
+          }
+        }
+        if (window.toast) window.toast.info('Open content requested')
+        break
+      default:
+        if (window.toast) window.toast.info('Recommendation applied')
+        console.log('Unhandled recommendation action:', action, rec)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-6">
       <div className="max-w-7xl mx-auto">
@@ -632,25 +940,15 @@ const EnhancedLearning = () => {
             </div>
             
             <div className="flex items-center space-x-4">
-              <button
-                onClick={() => setShowPredictiveAnalytics(!showPredictiveAnalytics)}
-                className={`btn-secondary flex items-center space-x-2 ${
-                  showPredictiveAnalytics ? 'bg-primary-500 text-white' : ''
-                }`}
-              >
-                <BarChart3 className="w-4 h-4" />
+              <SecondaryBtn onClick={() => setShowPredictiveAnalytics(!showPredictiveAnalytics)} className={`${showPredictiveAnalytics ? 'bg-primary-500 text-white' : ''}`}>
+                <BarChart3 className="w-4 h-4 mr-2" />
                 <span>Predictive Analytics</span>
-              </button>
+              </SecondaryBtn>
               
-              <button
-                onClick={() => setShowAIInsights(!showAIInsights)}
-                className={`btn-secondary flex items-center space-x-2 ${
-                  showAIInsights ? 'bg-secondary-500 text-white' : ''
-                }`}
-              >
-                <Brain className="w-4 h-4" />
+              <SecondaryBtn onClick={() => setShowAIInsights(!showAIInsights)} className={`${showAIInsights ? 'bg-secondary-500 text-white' : ''}`}>
+                <Brain className="w-4 h-4 mr-2" />
                 <span>AI Insights</span>
-              </button>
+              </SecondaryBtn>
               
               <div className="flex items-center space-x-2 bg-white dark:bg-gray-800 px-4 py-2 rounded-lg shadow">
                 <Star className="w-4 h-4 text-yellow-500" />
@@ -672,43 +970,30 @@ const EnhancedLearning = () => {
               </div>
               {/* Privacy toggle: on-device only processing */}
               <div className="flex items-center space-x-2">
-                <button
+                <SecondaryBtn
                   onClick={() => setOnDeviceOnly(v => {
                     const next = !v
                     try { localStorage.setItem('el:onDeviceOnly', JSON.stringify(next)) } catch {}
                     userAPI.saveSettings?.({ onDeviceOnly: next }).catch(() => {})
                     return next
                   })}
-                  className={`px-3 py-2 rounded-lg text-sm ${onDeviceOnly ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-800'}`}
                   title="On-device only: when enabled, derived signals stay local and network calls are minimized"
                 >
-                  <CameraIcon className="w-4 h-4 inline mr-2" />
+                  <CameraIcon className="w-4 h-4 mr-2" />
                   {onDeviceOnly ? 'On-device' : 'Network'}
-                </button>
+                </SecondaryBtn>
               </div>
               {/* header area - saved badge moved next to module Start button */}
             </div>
           </div>
         </motion.div>
         {/* Quick Actions */}
-        <div className="mb-6">
+            <div className="mb-6">
           <div className="flex items-center gap-3">
-            <button onClick={handleQuickMicroQuiz} disabled={quickActionLoading} className="btn-ghost flex items-center space-x-2">
-              <Target className="w-4 h-4" />
-              <span>Micro-quiz</span>
-            </button>
-            <button onClick={handleLowerDifficulty} disabled={quickActionLoading} className="btn-ghost flex items-center space-x-2">
-              <Settings className="w-4 h-4" />
-              <span>Lower difficulty</span>
-            </button>
-            <button onClick={handleShortBreathingBreak} className="btn-ghost flex items-center space-x-2">
-              <Timer className="w-4 h-4" />
-              <span>2-min break</span>
-            </button>
-            <button onClick={handleRegenerateContent} disabled={quickActionLoading} className="btn-ghost flex items-center space-x-2">
-              {quickActionLoading ? <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 11-8 8z"/></svg> : <RotateCcw className="w-4 h-4" />}
-              <span>Regenerate</span>
-            </button>
+            <PrimaryBtn onClick={handleQuickMicroQuiz} disabled={quickActionLoading}><Target className="w-4 h-4 mr-2" />Micro-quiz</PrimaryBtn>
+            <PrimaryBtn onClick={handleLowerDifficulty} disabled={quickActionLoading}><Settings className="w-4 h-4 mr-2" />Lower difficulty</PrimaryBtn>
+            <SecondaryBtn onClick={handleShortBreathingBreak}><Timer className="w-4 h-4 mr-2" />2-min break</SecondaryBtn>
+            <SecondaryBtn onClick={handleRegenerateContent} disabled={quickActionLoading}>{quickActionLoading ? <Spinner className="w-4 h-4 mr-2 text-gray-700" /> : <RotateCcw className="w-4 h-4 mr-2" />}Regenerate</SecondaryBtn>
           </div>
         </div>
 
@@ -933,13 +1218,10 @@ const EnhancedLearning = () => {
                       </div>
                       
                       <div className="ml-4 flex items-center space-x-3">
-                        <button
-                          onClick={() => startEnhancedLearningSession(module)}
-                          className="btn-primary flex items-center space-x-2"
-                        >
-                          <Play className="w-4 h-4" />
+                        <PrimaryBtn onClick={() => startEnhancedLearningSession(module)}>
+                          <Play className="w-4 h-4 mr-2" />
                           <span>Start Enhanced</span>
-                        </button>
+                        </PrimaryBtn>
                         {lastSavedModuleId === module.id && (
                           <div className="px-2 py-1 rounded-full bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300 text-xs flex items-center space-x-1 animate-bounce">
                             <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 6L9 17l-5-5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -989,6 +1271,69 @@ const EnhancedLearning = () => {
                 ))}
               </div>
             </motion.div>
+
+            {/* Recommendation panel (model-backed) */}
+            <div className="mt-6">
+              <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Personalized Recommendation</h3>
+                    <p className="text-sm text-gray-500 mt-1">Model-backed suggestion to help the learner now.</p>
+                  </div>
+                  <div>
+                    <button
+                      onClick={requestModelRecommendation}
+                      disabled={recLoading}
+                      className="inline-flex items-center space-x-2 rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+                    >
+                      {recLoading ? <Spinner className="w-4 h-4 text-white" /> : <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none"><path d="M12 2v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                      <span>{recLoading ? 'Requesting...' : 'Get Recommendation'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {recommendation ? (
+                  <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
+                    <div className="col-span-1 flex items-center space-x-3">
+                      <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white">
+                        <Lightbulb className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <div className="text-sm font-semibold text-gray-900 dark:text-white">{recommendation?.recommendation?.action ?? recommendation?.data?.recommendation?.action ?? 'Suggested action'}</div>
+                        <div className="text-xs text-gray-500 mt-1">{recommendation?.recommendation?.content_type ?? recommendation?.data?.recommendation?.content_type ?? ''}</div>
+                      </div>
+                    </div>
+
+                    <div className="col-span-1">
+                      <div className="mb-2 text-xs text-gray-500">Confidence</div>
+                      <ConfidenceBar value={(recommendation?.recommendation?.confidence ?? recommendation?.data?.recommendation?.confidence) || 0} />
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <span className="px-2 py-1 bg-gray-100 dark:bg-gray-700 text-xs rounded">Model: {String(recommendation?.model_based ?? recommendation?.data?.model_based ?? false)}</span>
+                        <span className="px-2 py-1 bg-gray-100 dark:bg-gray-700 text-xs rounded">Type: {recommendation?.recommendation?.content_type ?? recommendation?.data?.recommendation?.content_type ?? '—'}</span>
+                      </div>
+                    </div>
+
+                    <div className="col-span-1 flex items-start space-x-2 md:justify-end">
+                      <button onClick={() => handleApplyRecommendation(recommendation)} className="inline-flex items-center rounded-md bg-green-600 px-3 py-2 text-sm font-semibold text-white hover:bg-green-500">
+                        Apply
+                      </button>
+                      <button onClick={() => setShowRecDetails(d => !d)} className="inline-flex items-center rounded-md border px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-200">
+                        {showRecDetails ? 'Hide details' : 'Details'}
+                      </button>
+                    </div>
+
+                    {showRecDetails && (
+                      <div className="col-span-full mt-3 text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-3 rounded">
+                        <div className="mb-2"><strong>Specific:</strong> {recommendation?.recommendation?.specific ?? recommendation?.data?.recommendation?.specific ?? '—'}</div>
+                        <div><strong>Explanation:</strong> {recommendation?.explanation ?? recommendation?.data?.explanation ?? 'No explanation provided.'}</div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-4 text-sm text-gray-500">No recommendation yet — click Get Recommendation or end session to request automatically.</div>
+                )}
+              </div>
+            </div>
 
             {/* Active Session Dashboard */}
             {currentModule && (
@@ -1328,7 +1673,31 @@ const EnhancedLearning = () => {
           console.log('Applied recommendation:', rec)
         }}
       />
-      
+      {/* Create Module Modal (inline, not alert) */}
+      {showCreateModuleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black opacity-40" onClick={() => { setShowCreateModuleModal(false); setPendingAction(null) }} />
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 z-50 w-full max-w-md">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">Create a module to continue</h3>
+            <div className="space-y-3">
+              <input className="w-full px-3 py-2 rounded border dark:bg-gray-900" placeholder="Module title" value={newModuleTitle} onChange={e => setNewModuleTitle(e.target.value)} />
+              <div className="flex gap-2">
+                <select value={newModuleDifficulty} onChange={e => setNewModuleDifficulty(e.target.value)} className="flex-1 px-3 py-2 rounded border dark:bg-gray-900">
+                  <option value="beginner">beginner</option>
+                  <option value="intermediate">intermediate</option>
+                  <option value="advanced">advanced</option>
+                </select>
+                <input className="w-32 px-3 py-2 rounded border dark:bg-gray-900" value={newModuleDuration} onChange={e => setNewModuleDuration(e.target.value)} />
+              </div>
+              <div className="flex justify-end gap-2 mt-2">
+                <button onClick={() => { setShowCreateModuleModal(false); setPendingAction(null) }} className="px-3 py-2 rounded bg-gray-100 dark:bg-gray-700">Cancel</button>
+                <button onClick={submitCreateModuleFromModal} className="px-3 py-2 rounded bg-indigo-600 text-white">Create & Continue</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Floating AI Assistant Button */}
       {!showAIAssistant && (
         <motion.button

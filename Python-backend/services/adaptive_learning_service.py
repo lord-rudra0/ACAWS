@@ -141,21 +141,53 @@ class AdaptiveLearningService:
                 # Build a feature dict and attempt to map it to the model's
                 # expected raw columns. If overlap is insufficient we'll skip
                 # model inference and fall back to heuristics.
-                features = {
-                    "score": float(performance.get("score", 0)),
-                    "time_taken": float(performance.get("time_taken", 0)),
-                    "mistake_count": float(len(mistakes))
-                }
+                # If frontend supplied tokenized features (num__/cat__) or raw
+                # training column names, prefer them. Otherwise fall back to
+                # summary stats (score/time/mistake_count).
+                if isinstance(performance, dict):
+                    provided_keys = set(performance.keys())
+                else:
+                    provided_keys = set()
+
+                # If model exposes expected raw_columns, check for overlap with
+                # provided raw names first (e.g. 'age','school'). If sufficient
+                # overlap, use those raw fields.
+                expected = getattr(getattr(self, '_model', None) or get_model(), "raw_columns", None)
+                if expected:
+                    raw_overlap = sum(1 for c in expected if c in provided_keys)
+                else:
+                    raw_overlap = 0
+
+                has_token_keys = any(k.startswith('num__') or k.startswith('cat__') for k in provided_keys)
+
+                if raw_overlap >= max(1, (len(expected) // 4) if expected else 1):
+                    # Use raw feature names provided by client
+                    features = {c: performance.get(c) for c in provided_keys if c in expected}
+                    logger.info("Using client-provided raw feature names (overlap=%s)", raw_overlap)
+                elif has_token_keys:
+                    # Use tokenized features (frontend one-hot / numeric tokens)
+                    features = {k: performance.get(k) for k in provided_keys}
+                    logger.info("Using client-provided tokenized features (count=%s)", len(features))
+                else:
+                    # Fallback: use summary metrics only
+                    features = {
+                        "score": float(performance.get("score", 0)),
+                        "time_taken": float(performance.get("time_taken", 0)),
+                        "mistake_count": float(len(mistakes))
+                    }
 
                 # If the model exposes raw_columns we can try to provide
                 # values for them. Otherwise we'll rely on whatever saved
                 # columns the model reports.
                 expected = getattr(model, "raw_columns", None)
                 provided = set(features.keys())
+                logger.info("Model expected columns: %s", (expected if expected is not None else []))
+                logger.info("Provided feature keys count=%s sample=%s", len(provided), list(provided)[:10])
                 if not expected:
                     logger.info("Model available but no raw_columns metadata present; skipping model to avoid incompatible input shapes.")
                 else:
                     overlap = sum(1 for c in expected if c in provided)
+                    logger.info("Model/provided overlap=%s of expected=%s", overlap, len(expected))
                     if overlap < max(1, len(expected) // 4):
                         logger.info("Model available but provided features don't match expected raw columns (overlap=%s). Skipping model.", overlap)
                     else:

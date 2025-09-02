@@ -120,7 +120,7 @@ expressAPI.get('/health')
   .catch(err => console.error('❌ Could not connect to Express backend:', err.message))
 
 const pythonAPI = createAPIInstance(
-  '/api',  // This will be proxied to http://localhost:8000 by Vite
+  import.meta.env.VITE_PY_API_URL || 'http://localhost:8000',
   'Python'
 )
 

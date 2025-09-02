@@ -292,12 +292,17 @@ async def recommend_learning(
         user_id = request_data.get("user_id", "anonymous")
         performance = request_data.get("performance", {})
 
-        # If caller provided raw_features (student attributes) prefer that as
-        # the input to the model. This lets frontend send richer data when
-        # available so the advanced pipeline (which expects student raw
-        # columns) can be used.
-        raw = performance.get("raw_features")
-        if isinstance(raw, dict) and raw:
+        # If caller provided model-ready tokens (num__/cat__), prefer that as
+        # the input to the model. Frontend can either send a `raw_features` map
+        # or directly supply tokenized keys matching the training pipeline.
+        raw = performance.get("raw_features") if isinstance(performance, dict) else None
+        # detect token-like keys in top-level performance (best-effort)
+        provided_keys = set(performance.keys()) if isinstance(performance, dict) else set()
+        has_token_keys = any(k.startswith('num__') or k.startswith('cat__') for k in provided_keys)
+
+        if has_token_keys:
+            perf_input = performance
+        elif isinstance(raw, dict) and raw:
             # merge the simple summary metrics into raw features
             merged = {**raw, "score": float(performance.get("score", 0)), "time_taken": float(performance.get("time_taken", 0)), "mistake_count": float(len(performance.get("mistakes", [])))}
             perf_input = merged
@@ -311,7 +316,8 @@ async def recommend_learning(
         try:
             await log_generic("learning_recommendations", user_id=user_id, payload={"request": request_data, "result": result})
         except Exception as e:
-            logger.error(f"Recommendation persistence failed: {e}")
+            # Avoid truthiness tests on DB objects; log exception message
+            logger.error("Recommendation persistence failed: %s", str(e))
 
         return {
             "success": True,
