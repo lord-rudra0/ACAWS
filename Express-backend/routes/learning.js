@@ -4,6 +4,7 @@ import { query } from '../config/database.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import mongoose from 'mongoose'
 import LearningModule from '../models/LearningModule.js'
+import LearningSession from '../models/LearningSession.js'
 
 const router = express.Router()
 
@@ -222,6 +223,42 @@ router.put('/sessions/:sessionId/end', [
       completion_percentage
     }
   })
+}))
+
+// Save full session summary (Mongo) - used by frontend to persist AI-generated session summaries
+router.post('/sessions/save', asyncHandler(async (req, res) => {
+  const userId = req.user?.id
+  const { module_id, session_type = 'study', summary = {}, duration, cognitiveHistory = [], adaptations = {}, metrics = {} } = req.body
+
+  if (!module_id) {
+    return res.status(400).json({ success: false, message: 'module_id required' })
+  }
+
+  const doc = await LearningSession.create({
+    user_id: userId,
+    module_id,
+    session_type,
+    status: 'completed',
+    initial_cognitive_state: summary.initial_cognitive_state || {},
+    final_cognitive_state: summary.final_cognitive_state || {},
+    content_progress: summary.completion_percentage || 100,
+    interactions: summary.interactions || [],
+    adaptations_applied: adaptations || {},
+    attention_score: metrics.attention_score,
+    wellness_score: metrics.wellness_score,
+    completion_percentage: summary.completion_percentage || 100,
+    started_at: summary.started_at ? new Date(summary.started_at) : new Date(),
+    ended_at: summary.ended_at ? new Date(summary.ended_at) : new Date(),
+    last_updated: new Date()
+  })
+
+  // Also store cognitiveHistory as separate interactions if provided
+  if (Array.isArray(cognitiveHistory) && cognitiveHistory.length > 0) {
+    doc.interactions = doc.interactions.concat(cognitiveHistory.map(ch => ({ type: 'cognitive', payload: ch })))
+    await doc.save()
+  }
+
+  res.status(201).json({ success: true, session: doc.toJSON() })
 }))
 
 // Get learning recommendations

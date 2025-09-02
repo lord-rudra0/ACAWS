@@ -258,6 +258,27 @@ export const learningAPI = {
       throw new Error(error.message || 'Failed to generate learning path')
     }
   }
+
+  ,
+  // Persist session summary (Mongo)
+  saveSessionSummary: async (summaryData) => {
+    try {
+      const response = await expressAPI.post('/api/learning/sessions/save', summaryData)
+      return response.data
+    } catch (error) {
+      throw new Error(error.message || 'Failed to save session summary')
+    }
+  },
+
+  // Create module (persisted)
+  createModule: async (moduleData) => {
+    try {
+      const response = await expressAPI.post('/api/learning/modules', moduleData)
+      return response.data
+    } catch (error) {
+      throw new Error(error.message || 'Failed to create module')
+    }
+  }
 }
 
 export const wellnessAPI = {
@@ -409,6 +430,26 @@ export const analyticsAPI = {
       return response.data
     } catch (error) {
       throw new Error(error.message || 'Failed to load performance metrics')
+    }
+  }
+}
+
+export const userAPI = {
+  getSettings: async () => {
+    try {
+      const response = await expressAPI.get('/api/users/me/settings')
+      return response.data
+    } catch (error) {
+      throw new Error(error.message || 'Failed to load user settings')
+    }
+  },
+
+  saveSettings: async (settings) => {
+    try {
+      const response = await expressAPI.post('/api/users/me/settings', settings)
+      return response.data
+    } catch (error) {
+      throw new Error(error.message || 'Failed to save user settings')
     }
   }
 }
