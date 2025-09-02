@@ -4,6 +4,7 @@ import { query } from '../config/database.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import mongoose from 'mongoose'
 import LearningModule from '../models/LearningModule.js'
+import tutorService from '../services/tutorService.js'
 import LearningSession from '../models/LearningSession.js'
 
 const router = express.Router()
@@ -39,7 +40,20 @@ router.post('/modules', [
 
   const { title, description, category, difficulty, duration, topics = [], prerequisites = [] } = req.body
   const doc = await LearningModule.create({ title, description, category, difficulty, duration, topics, prerequisites, created_at: new Date() })
-  res.status(201).json({ success: true, module: doc.toJSON() })
+  // Also create a lightweight TutorRoadmap so modules appear in AI/Tutor listings
+  try {
+    const roadmapPayload = {
+      title: title,
+      description: description || '',
+      meta: { linkedModuleId: doc._id, category, difficulty, duration }
+    }
+    const rd = await tutorService.createRoadmap(roadmapPayload)
+    res.status(201).json({ success: true, module: doc.toJSON(), tutorRoadmap: rd })
+  } catch (e) {
+    // If tutor roadmap creation fails, still return module but warn
+    console.warn('Failed to create linked TutorRoadmap for module', e)
+    res.status(201).json({ success: true, module: doc.toJSON(), tutorRoadmap: null })
+  }
 }))
 
 // Get user's module progress

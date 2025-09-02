@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { tutorAPI } from '../../services/api'
+import { learningAPI } from '../../services/api'
 
 export default function ModulePicker({ onCreated }) {
   const [title, setTitle] = useState('')
@@ -12,25 +12,36 @@ export default function ModulePicker({ onCreated }) {
   const handleCreate = async () => {
     setError(null)
     if (!title.trim()) return setError('Title is required')
+    if ((description || '').trim().length < 5) return setError('Description must be at least 5 characters')
     setLoading(true)
     try {
       const payload = {
         title: title.trim(),
-        level,
-        duration_minutes: Number(durationMinutes) || 30,
+        category: 'general',
+        difficulty: level,
+        duration: Number(durationMinutes) || 30,
         description: description.trim()
       }
-      const res = await tutorAPI.createRoadmap(payload)
-      // Expect server to return created roadmap in res.data or res
-      const created = res.data || res
-      if (onCreated) onCreated(created)
+      const res = await learningAPI.createModule(payload)
+      // Server returns { success: true, module }
+      const createdModule = (res && res.module) ? res.module : res
+      if (onCreated) onCreated(createdModule)
       setTitle('')
       setDescription('')
       setDurationMinutes(30)
       setLevel('beginner')
     } catch (e) {
       console.error('Create roadmap failed', e)
-      setError(e.message || 'Failed to create module')
+      // Try to surface server validation details if present
+      let msg = 'Failed to create module'
+      try {
+        if (e?.response?.data?.message) msg = e.response.data.message
+        else if (e?.response?.data?.errors) msg = e.response.data.errors.map(err => err.msg || err.msg).join(', ')
+        else if (e?.message) msg = e.message
+      } catch (ex) {
+        msg = e.message || msg
+      }
+      setError(msg)
     } finally {
       setLoading(false)
     }

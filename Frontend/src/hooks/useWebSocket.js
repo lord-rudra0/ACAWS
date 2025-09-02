@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 
 export const useWebSocket = (url, options = {}) => {
-  const [socket, setSocket] = useState(null)
+  // Use a ref for the raw WebSocket instance to avoid rerenders and callback churn
+  const socketRef = useRef(null)
   const [lastMessage, setLastMessage] = useState(null)
   const [readyState, setReadyState] = useState(WebSocket.CONNECTING)
   const [error, setError] = useState(null)
@@ -9,6 +10,8 @@ export const useWebSocket = (url, options = {}) => {
   const reconnectTimeoutRef = useRef(null)
   const reconnectAttempts = useRef(0)
   const heartbeatIntervalRef = useRef(null)
+  const isConnectingRef = useRef(false)
+  const lastConnectTimeRef = useRef(0)
   const maxReconnectAttempts = options.maxReconnectAttempts || 5
   const reconnectInterval = options.reconnectInterval || 3000
   const heartbeatInterval = options.heartbeatInterval || 30000
@@ -25,21 +28,22 @@ export const useWebSocket = (url, options = {}) => {
     console.log(`WebSocket ${event}:`, logEntry)
   }, [])
 
-  const startHeartbeat = useCallback(() => {
+  const startHeartbeat = useCallback((ws) => {
     if (heartbeatIntervalRef.current) {
       clearInterval(heartbeatIntervalRef.current)
     }
-    
+
     heartbeatIntervalRef.current = setInterval(() => {
-      if (socket && socket.readyState === WebSocket.OPEN) {
+      const activeSocket = ws || socketRef.current
+      if (activeSocket && activeSocket.readyState === WebSocket.OPEN) {
         try {
-          socket.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }))
+          activeSocket.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }))
         } catch (error) {
           console.error('Heartbeat failed:', error)
         }
       }
     }, heartbeatInterval)
-  }, [socket, heartbeatInterval])
+  }, [heartbeatInterval])
 
   const stopHeartbeat = useCallback(() => {
     if (heartbeatIntervalRef.current) {
@@ -49,27 +53,51 @@ export const useWebSocket = (url, options = {}) => {
   }, [])
 
   const connect = useCallback(() => {
+    // Prevent rapid repeated connect attempts
+    const now = Date.now()
+    if (now - lastConnectTimeRef.current < 500) {
+      logConnection('connect_rate_limited', { sinceLast: now - lastConnectTimeRef.current })
+      return
+    }
+    lastConnectTimeRef.current = now
+
+    // Avoid re-entrance if a connect is already in progress
+    if (isConnectingRef.current) {
+      logConnection('connect_skipped_already_connecting')
+      return
+    }
+    isConnectingRef.current = true
+
+    // If a socket exists and is not closed, skip creating a new one
+    if (socketRef.current && socketRef.current.readyState !== WebSocket.CLOSED) {
+      logConnection('connect_skipped_existing_socket', { readyState: socketRef.current.readyState })
+      isConnectingRef.current = false
+      return
+    }
     try {
       logConnection('connecting', { url, attempt: reconnectAttempts.current + 1 })
       
       const ws = new WebSocket(url)
       
-      ws.onopen = (event) => {
+  ws.onopen = (event) => {
         setReadyState(WebSocket.OPEN)
         setError(null)
         reconnectAttempts.current = 0
-        
-        logConnection('connected', { 
+
+        logConnection('connected', {
           readyState: ws.readyState,
-          protocol: ws.protocol 
+          protocol: ws.protocol
         })
-        
-        startHeartbeat()
-        
+
+  // store the raw WebSocket on a ref to avoid rerenders
+  socketRef.current = ws
+  startHeartbeat(ws)
+  isConnectingRef.current = false
+
         if (options.onOpen) options.onOpen(event)
       }
 
-      ws.onmessage = (event) => {
+  ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data)
           
@@ -79,10 +107,7 @@ export const useWebSocket = (url, options = {}) => {
             return
           }
           
-          setLastMessage({
-            ...data,
-            receivedAt: new Date().toISOString()
-          })
+          setLastMessage({ ...data, receivedAt: new Date().toISOString() })
           
           logConnection('message_received', { 
             type: data.type,
@@ -102,26 +127,30 @@ export const useWebSocket = (url, options = {}) => {
       ws.onclose = (event) => {
         setReadyState(WebSocket.CLOSED)
         stopHeartbeat()
-        
-        logConnection('disconnected', { 
-          code: event.code, 
+
+        logConnection('disconnected', {
+          code: event.code,
           reason: event.reason,
-          wasClean: event.wasClean 
+          wasClean: event.wasClean
         })
-        
+
         if (options.onClose) options.onClose(event)
-        
+
+        // Clear ref only when closed
+  if (socketRef.current === ws) socketRef.current = null
+  isConnectingRef.current = false
+
         // Attempt reconnection if not intentional and within retry limit
         if (event.code !== 1000 && reconnectAttempts.current < maxReconnectAttempts) {
           reconnectAttempts.current++
           const delay = reconnectInterval * Math.pow(1.5, reconnectAttempts.current - 1) // Exponential backoff
-          
-          logConnection('reconnect_scheduled', { 
+
+          logConnection('reconnect_scheduled', {
             attempt: reconnectAttempts.current,
             delay: delay,
-            maxAttempts: maxReconnectAttempts 
+            maxAttempts: maxReconnectAttempts
           })
-          
+
           reconnectTimeoutRef.current = setTimeout(() => {
             connect()
           }, delay)
@@ -134,7 +163,7 @@ export const useWebSocket = (url, options = {}) => {
         }
       }
 
-      ws.onerror = (error) => {
+  ws.onerror = (error) => {
         const errorMsg = 'WebSocket connection failed'
         setError({
           type: 'connection_error',
@@ -145,10 +174,14 @@ export const useWebSocket = (url, options = {}) => {
         
         logConnection('error', { error: errorMsg })
         
+  // clear connecting flag so user can retry
+  isConnectingRef.current = false
+
         if (options.onError) options.onError(error)
       }
 
-      setSocket(ws)
+  // store reference (if not already stored in onopen)
+  socketRef.current = ws
     } catch (connectionError) {
       const errorMsg = 'Failed to create WebSocket connection'
       setError({
@@ -163,15 +196,15 @@ export const useWebSocket = (url, options = {}) => {
   }, [url, options, maxReconnectAttempts, reconnectInterval, logConnection, startHeartbeat, stopHeartbeat])
 
   const sendMessage = useCallback((message) => {
-    if (socket && readyState === WebSocket.OPEN) {
+  const ws = socketRef.current
+  if (ws && readyState === WebSocket.OPEN) {
       try {
         const messageWithId = {
           ...message,
           id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           sentAt: new Date().toISOString()
         }
-        
-        socket.send(JSON.stringify(messageWithId))
+    ws.send(JSON.stringify(messageWithId))
         
         logConnection('message_sent', { 
           type: message.type,
@@ -203,7 +236,7 @@ export const useWebSocket = (url, options = {}) => {
       
       return { success: false, error: errorMsg }
     }
-  }, [socket, readyState, logConnection])
+  }, [readyState, logConnection])
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {
@@ -212,11 +245,15 @@ export const useWebSocket = (url, options = {}) => {
     
     stopHeartbeat()
     
-    if (socket) {
-      socket.close(1000, 'Intentional disconnect')
+    const ws = socketRef.current
+    if (ws) {
+      try {
+        ws.close(1000, 'Intentional disconnect')
+      } catch (e) {}
+      socketRef.current = null
       logConnection('manual_disconnect')
     }
-  }, [socket, stopHeartbeat, logConnection])
+  }, [stopHeartbeat, logConnection])
 
   const forceReconnect = useCallback(() => {
     reconnectAttempts.current = 0
@@ -260,7 +297,7 @@ export const useWebSocket = (url, options = {}) => {
   }, [readyState, error, forceReconnect, logConnection])
 
   return {
-    socket,
+  socket: socketRef.current,
     lastMessage,
     readyState,
     error,
@@ -269,7 +306,7 @@ export const useWebSocket = (url, options = {}) => {
     disconnect,
     reconnect: forceReconnect,
     isConnected: readyState === WebSocket.OPEN,
-    isConnecting: readyState === WebSocket.CONNECTING
+  isConnecting: Boolean(isConnectingRef.current || readyState === WebSocket.CONNECTING)
   }
 }
 

@@ -87,18 +87,21 @@ const Learning = () => {
   const { error, handleAsync, clearError } = useErrorHandler()
   
   // WebSocket for real-time cognitive updates
-  const { sendMessage, lastMessage, readyState } = useWebSocket(
-    `ws://localhost:5000/ws/learning/${Date.now()}`,
-    {
-      onMessage: (data) => {
-        if (data.type === 'cognitive_update') {
-          setCognitiveState(data.cognitiveState)
-        } else if (data.type === 'performance_update') {
-          setCurrentPerformance(data.performance)
-        }
+  // Use a stable URL so the hook doesn't remount on every render.
+  const wsUrl = React.useMemo(() => {
+    const uid = userId || 'anon'
+    return `ws://localhost:5000/ws/learning/${uid}`
+  }, [userId])
+
+  const { sendMessage, lastMessage, readyState } = useWebSocket(wsUrl, {
+    onMessage: (data) => {
+      if (data.type === 'cognitive_update') {
+        setCognitiveState(data.cognitiveState)
+      } else if (data.type === 'performance_update') {
+        setCurrentPerformance(data.performance)
       }
     }
-  )
+  })
 
   // Load learning modules on mount
   useEffect(() => {
@@ -151,8 +154,12 @@ const Learning = () => {
   const loadLearningModules = async () => {
     try {
       setModuleLoading(true)
-      const response = await learningAPI.getModules()
-      setModules(response.data || [])
+  const response = await learningAPI.getModules()
+  // API returns { success: true, modules: [...] }
+  const list = response && (response.modules || response.data || response) || []
+  // Normalize id/_id to id
+  const normalized = (Array.isArray(list) ? list : []).map(m => ({ ...m, id: m.id || m._id || m.module_id }))
+  setModules(normalized)
     } catch (error) {
       console.error('Failed to load learning modules:', error)
     } finally {
@@ -182,11 +189,15 @@ const Learning = () => {
   }
 
   const handleModuleCreated = (created) => {
-    // Accept server response shape variations
-    const roadmap = created.roadmap || created.data || created
-    if (!roadmap) return
-    setRoadmaps(prev => [roadmap, ...prev])
-    setSelectedRoadmap(roadmap)
+  // Accept server response shape variations for learning modules
+  const module = created.module || created.data || created
+  if (!module) return
+  // Normalize id field
+  const normalized = { ...module, id: module.id || module._id || module.module_id }
+  setModules(prev => [normalized, ...prev])
+  setSelectedModule(normalized)
+  // Also make it available as a roadmap for tutor flows if appropriate
+  setRoadmaps(prev => prev)
   }
 
   // Start learning session
