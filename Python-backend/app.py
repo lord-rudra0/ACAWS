@@ -1,6 +1,6 @@
-from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+# removed HTTPBearer import - authentication disabled for development
 import uvicorn
 import os
 from dotenv import load_dotenv
@@ -44,7 +44,6 @@ else:
 
 from api.routes import emotion_router, attention_router, learning_router, wellness_router, analytics_router
 from core.websocket_manager import WebSocketManager
-from core.auth import verify_token
 from database.logger import log_emotion, log_attention, log_fatigue
 
 # Configure logging
@@ -117,8 +116,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Security
-security = HTTPBearer()
+# Security removed for development: authentication disabled
 
 # Health check endpoint
 @app.get("/health")
@@ -192,12 +190,7 @@ app.include_router(learning_router, prefix="/api/learning", tags=["Adaptive Lear
 app.include_router(wellness_router, prefix="/api/wellness", tags=["Wellness"])
 app.include_router(analytics_router, prefix="/api/analytics", tags=["Analytics"])
 
-# Protected route example
-@app.get("/api/protected")
-async def protected_route(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Example protected route"""
-    user = await verify_token(credentials.credentials)
-    return {"message": f"Hello {user['name']}, this is a protected route!"}
+# Legacy protected route removed — authentication disabled for development
 
 # Root endpoint
 @app.get("/")
