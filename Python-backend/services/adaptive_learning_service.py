@@ -2,6 +2,7 @@ import logging
 from typing import Dict, List, Optional
 from datetime import datetime
 import statistics
+import re
 from services.learning_model import get_model
 
 logger = logging.getLogger(__name__)
@@ -149,6 +150,83 @@ class AdaptiveLearningService:
                 else:
                     provided_keys = set()
 
+                # Normalize/map incoming features to the model's expected names
+                def _normalize_features_for_model(perf: Dict, model) -> Dict:
+                    mapped = {}
+                    if not perf or not isinstance(perf, dict):
+                        return mapped
+
+                    raw_cols = getattr(model, 'raw_columns', []) or []
+                    token_cols = getattr(model, 'columns', []) or []
+
+                    # 1) If the client provided a raw_features dict, prefer it
+                    client_raw = perf.get('raw_features') or perf.get('raw_performance') or None
+                    if isinstance(client_raw, dict):
+                        for k, v in client_raw.items():
+                            # exact match
+                            if k in raw_cols:
+                                mapped[k] = v
+                                continue
+                            # case-insensitive match
+                            m = next((c for c in raw_cols if c.lower() == str(k).lower()), None)
+                            if m:
+                                mapped[m] = v
+                                continue
+                            # normalized key match (remove underscores/spaces/dashes)
+                            kk = re.sub(r"[_\s\-]", "", str(k)).lower()
+                            m2 = next((c for c in raw_cols if re.sub(r"[_\s\-]", "", c).lower() == kk), None)
+                            if m2:
+                                mapped[m2] = v
+
+                    # 2) Map tokenized numeric fields (num__<field>) to raw names when possible
+                    for k, v in perf.items():
+                        if not isinstance(k, str):
+                            continue
+                        if k.startswith('num__'):
+                            raw = k[len('num__'):]
+                            m = next((c for c in raw_cols if c.lower() == raw.lower()), None)
+                            if m:
+                                mapped[m] = v
+                            elif k in token_cols:
+                                mapped[k] = v
+                        elif k.startswith('cat__'):
+                            # cat__field_VALUE or cat__field_value
+                            rest = k[len('cat__'):]
+                            # split only on last underscore to allow values with underscores
+                            parts = rest.split('_')
+                            if len(parts) >= 2:
+                                field = parts[0]
+                                value = parts[1]
+                                m = next((c for c in raw_cols if c.lower() == field.lower()), None)
+                                # If this categorical token is active (1), set raw field to the value
+                                try:
+                                    active = bool(int(v))
+                                except Exception:
+                                    active = bool(v)
+                                if m and active:
+                                    mapped[m] = value
+                                elif k in token_cols:
+                                    mapped[k] = v
+                        else:
+                            # copy over summary metrics if they match expected raw or token columns
+                            if k in raw_cols:
+                                mapped[k] = v
+                            elif k in token_cols:
+                                mapped[k] = v
+
+                    # 3) As a final pass, try to include numeric summary keys
+                    for summary_key in ('score', 'time_taken', 'mistake_count', 'mistakes', 'duration'):
+                        if summary_key in perf and summary_key not in mapped:
+                            if summary_key in raw_cols:
+                                mapped[summary_key] = perf[summary_key]
+                            elif summary_key in token_cols:
+                                mapped[summary_key] = perf[summary_key]
+
+                    return mapped
+
+                features = _normalize_features_for_model(performance, model)
+                provided_keys = set(features.keys())
+
                 # If model exposes expected raw_columns, check for overlap with
                 # provided raw names first (e.g. 'age','school'). If sufficient
                 # overlap, use those raw fields.
@@ -161,13 +239,16 @@ class AdaptiveLearningService:
                 has_token_keys = any(k.startswith('num__') or k.startswith('cat__') for k in provided_keys)
 
                 if raw_overlap >= max(1, (len(expected) // 4) if expected else 1):
-                    # Use raw feature names provided by client
-                    features = {c: performance.get(c) for c in provided_keys if c in expected}
-                    logger.info("Using client-provided raw feature names (overlap=%s)", raw_overlap)
+                    # features already normalized above; keep those that match expected
+                    features = {c: v for c, v in features.items() if c in expected}
+                    logger.info("Using normalized client-provided raw feature names (overlap=%s)", raw_overlap)
                 elif has_token_keys:
-                    # Use tokenized features (frontend one-hot / numeric tokens)
-                    features = {k: performance.get(k) for k in provided_keys}
-                    logger.info("Using client-provided tokenized features (count=%s)", len(features))
+                    # If token keys exist, prefer those (they may already be present in features)
+                    # ensure we include tokenized keys from original perf if not already in features
+                    for k in performance.keys():
+                        if (k.startswith('num__') or k.startswith('cat__')) and k not in features:
+                            features[k] = performance.get(k)
+                    logger.info("Using client-provided tokenized features (count=%s)", len([k for k in features.keys() if k.startswith('num__') or k.startswith('cat__')]))
                 else:
                     # Fallback: use summary metrics only
                     features = {

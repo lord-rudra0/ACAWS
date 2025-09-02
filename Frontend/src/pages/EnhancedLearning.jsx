@@ -89,6 +89,27 @@ const EnhancedLearning = () => {
   const [sessionTime, setSessionTime] = useState(0)
   const [showAITutor, setShowAITutor] = useState(false)
   const [showPredictiveAnalytics, setShowPredictiveAnalytics] = useState(false)
+  // Model expected fields (reuse same lists used in buildModelFeatures)
+  const MODEL_NUMERIC_FIELDS = ['age','Medu','Fedu','traveltime','studytime','failures','famrel','freetime','goout','Dalc','Walc','health','absences']
+  const MODEL_CATEGORICAL_OPTIONS = {
+    school: ['GP','MS'],
+    sex: ['F','M'],
+    address: ['U','R'],
+    famsize: ['GT3','LE3'],
+    Pstatus: ['T','A'],
+    Mjob: ['at_home','health','services','teacher','other'],
+    Fjob: ['at_home','health','services','teacher','other'],
+    reason: ['home','reputation','course','other'],
+    guardian: ['mother','father','other'],
+    schoolsup: ['yes','no'],
+    famsup: ['yes','no'],
+    paid: ['yes','no'],
+    activities: ['yes','no'],
+    nursery: ['yes','no'],
+    higher: ['yes','no'],
+    internet: ['yes','no'],
+    romantic: ['yes','no']
+  }
   const [learningMetrics, setLearningMetrics] = useState({
     totalStudyTime: 0,
     modulesCompleted: 0,
@@ -132,6 +153,8 @@ const EnhancedLearning = () => {
   const [showCreateModuleModal, setShowCreateModuleModal] = useState(false)
   // pendingAction holds the action to execute after creating/selecting a module
   const [pendingAction, setPendingAction] = useState(null)
+  // allow selecting an existing module in the modal
+  const [selectedModuleId, setSelectedModuleId] = useState(null)
 
   const [autoSuggestEnabled, setAutoSuggestEnabled] = useState(() => {
     try { return JSON.parse(localStorage.getItem('el:autoSuggest')) ?? true } catch { return true }
@@ -146,6 +169,11 @@ const EnhancedLearning = () => {
   const [recommendation, setRecommendation] = useState(null)
   const [recLoading, setRecLoading] = useState(false)
   const [showRecDetails, setShowRecDetails] = useState(false)
+  // Missing-data modal state: when model is skipped, ask user to fill missing raw fields
+  const [showMissingDataModal, setShowMissingDataModal] = useState(false)
+  const [missingFields, setMissingFields] = useState([])
+  const [rawFeatureForm, setRawFeatureForm] = useState({})
+  const [askedForMissingData, setAskedForMissingData] = useState(false)
 
   useEffect(() => {
     // Load persisted modules from backend on mount
@@ -443,6 +471,25 @@ const EnhancedLearning = () => {
 
   // Create module from modal and optionally continue pending action
   const submitCreateModuleFromModal = async () => {
+    // If user selected an existing module, use it
+    if (selectedModuleId) {
+      const chosen = modules.find(m => String(m.id) === String(selectedModuleId))
+      if (chosen) {
+        setCurrentModule(chosen)
+        setShowCreateModuleModal(false)
+        const action = pendingAction
+        setPendingAction(null)
+        setSelectedModuleId(null)
+        setTimeout(() => {
+          if (action === 'quickMicroQuiz') handleQuickMicroQuiz()
+          if (action === 'lowerDifficulty') handleLowerDifficulty()
+          if (action === 'regenerateContent') handleRegenerateContent()
+        }, 100)
+        return
+      }
+    }
+
+    // Otherwise treat as create-new flow
     if (!newModuleTitle || !newModuleTitle.trim()) {
       if (window.toast) window.toast.info('Please enter a module title')
       return
@@ -471,13 +518,15 @@ const EnhancedLearning = () => {
       // set as current module and close modal
       setCurrentModule(created)
       setShowCreateModuleModal(false)
+      const action = pendingAction
       setPendingAction(null)
+      setSelectedModuleId(null)
 
       // Small delay to ensure state is applied before invoking the pending action
       setTimeout(() => {
-        if (pendingAction === 'quickMicroQuiz') handleQuickMicroQuiz()
-        if (pendingAction === 'lowerDifficulty') handleLowerDifficulty()
-        if (pendingAction === 'regenerateContent') handleRegenerateContent()
+        if (action === 'quickMicroQuiz') handleQuickMicroQuiz()
+        if (action === 'lowerDifficulty') handleLowerDifficulty()
+        if (action === 'regenerateContent') handleRegenerateContent()
       }, 100)
     } catch (err) {
       console.error('Create module failed:', err)
@@ -486,11 +535,13 @@ const EnhancedLearning = () => {
       setModules(prev => [...prev, created])
       setCurrentModule(created)
       setShowCreateModuleModal(false)
+      const action = pendingAction
       setPendingAction(null)
+      setSelectedModuleId(null)
       setTimeout(() => {
-        if (pendingAction === 'quickMicroQuiz') handleQuickMicroQuiz()
-        if (pendingAction === 'lowerDifficulty') handleLowerDifficulty()
-        if (pendingAction === 'regenerateContent') handleRegenerateContent()
+        if (action === 'quickMicroQuiz') handleQuickMicroQuiz()
+        if (action === 'lowerDifficulty') handleLowerDifficulty()
+        if (action === 'regenerateContent') handleRegenerateContent()
       }, 100)
     }
   }
@@ -796,6 +847,8 @@ const EnhancedLearning = () => {
     return features
   }
 
+  
+
   const requestModelRecommendation = async () => {
     setRecLoading(true)
     try {
@@ -851,6 +904,8 @@ const EnhancedLearning = () => {
         user_id: user?.id || null,
         // send the model-ready feature tokens in `performance` so backend can feed the pipeline directly
         performance: modelFeatures,
+        // also include the raw feature map so backend can compute overlap against expected raw columns
+        raw_features: rawDefaults,
         raw_performance: perfNormalized,
         cognitive_history: sessionAnalytics.cognitiveHistory?.slice(-100) || [],
         current_module: currentModule ? { id: currentModule.id, title: currentModule.title, difficulty: currentModule.difficulty } : null
@@ -860,6 +915,15 @@ const EnhancedLearning = () => {
       const resp = await pythonAPI.post('/api/learning/recommend', payload)
       if (resp && resp.data) {
         setRecommendation(resp.data.recommendation || resp.data)
+
+        // If backend skipped model, ask user to provide or correct raw fields (Option A)
+        const modelBased = resp.data.model_based ?? resp.data?.recommendation?.model_based
+        if (modelBased === false && !askedForMissingData) {
+          // prefill form with our best-effort raw defaults so user can correct values
+          setRawFeatureForm({ ...rawDefaults })
+          setShowMissingDataModal(true)
+          setAskedForMissingData(true)
+        }
       }
       return resp?.data
     } catch (err) {
@@ -918,6 +982,34 @@ const EnhancedLearning = () => {
       default:
         if (window.toast) window.toast.info('Recommendation applied')
         console.log('Unhandled recommendation action:', action, rec)
+    }
+  }
+
+  // Submit missing raw fields entered by user and retry recommendation
+  const submitMissingDataAndRetry = async () => {
+    setShowMissingDataModal(false)
+    try {
+      setRecLoading(true)
+      // Build tokenized features again from user-input raw fields
+      const modelFeatures = buildModelFeatures(rawFeatureForm, { score: learningMetrics.averageScore ?? 0, time_taken: sessionTime ?? 0, mistake_count: sessionAnalytics.performanceHistory?.slice(-1)?.[0]?.mistakes ?? 0 })
+      const payload = {
+        user_id: user?.id || null,
+        performance: modelFeatures,
+        raw_features: rawFeatureForm,
+        raw_performance: { score: learningMetrics.averageScore ?? 0, time_taken: sessionTime ?? 0, mistake_count: sessionAnalytics.performanceHistory?.slice(-1)?.[0]?.mistakes ?? 0 },
+        cognitive_history: sessionAnalytics.cognitiveHistory?.slice(-100) || [],
+        current_module: currentModule ? { id: currentModule.id, title: currentModule.title, difficulty: currentModule.difficulty } : null
+      }
+
+      const resp = await pythonAPI.post('/api/learning/recommend', payload)
+      if (resp && resp.data) {
+        setRecommendation(resp.data.recommendation || resp.data)
+      }
+      setAskedForMissingData(false)
+    } catch (err) {
+      console.error('Retry recommendation failed:', err)
+    } finally {
+      setRecLoading(false)
     }
   }
 
@@ -1272,68 +1364,7 @@ const EnhancedLearning = () => {
               </div>
             </motion.div>
 
-            {/* Recommendation panel (model-backed) */}
-            <div className="mt-6">
-              <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-lg">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Personalized Recommendation</h3>
-                    <p className="text-sm text-gray-500 mt-1">Model-backed suggestion to help the learner now.</p>
-                  </div>
-                  <div>
-                    <button
-                      onClick={requestModelRecommendation}
-                      disabled={recLoading}
-                      className="inline-flex items-center space-x-2 rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
-                    >
-                      {recLoading ? <Spinner className="w-4 h-4 text-white" /> : <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none"><path d="M12 2v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                      <span>{recLoading ? 'Requesting...' : 'Get Recommendation'}</span>
-                    </button>
-                  </div>
-                </div>
-
-                {recommendation ? (
-                  <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
-                    <div className="col-span-1 flex items-center space-x-3">
-                      <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white">
-                        <Lightbulb className="w-6 h-6" />
-                      </div>
-                      <div>
-                        <div className="text-sm font-semibold text-gray-900 dark:text-white">{recommendation?.recommendation?.action ?? recommendation?.data?.recommendation?.action ?? 'Suggested action'}</div>
-                        <div className="text-xs text-gray-500 mt-1">{recommendation?.recommendation?.content_type ?? recommendation?.data?.recommendation?.content_type ?? ''}</div>
-                      </div>
-                    </div>
-
-                    <div className="col-span-1">
-                      <div className="mb-2 text-xs text-gray-500">Confidence</div>
-                      <ConfidenceBar value={(recommendation?.recommendation?.confidence ?? recommendation?.data?.recommendation?.confidence) || 0} />
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        <span className="px-2 py-1 bg-gray-100 dark:bg-gray-700 text-xs rounded">Model: {String(recommendation?.model_based ?? recommendation?.data?.model_based ?? false)}</span>
-                        <span className="px-2 py-1 bg-gray-100 dark:bg-gray-700 text-xs rounded">Type: {recommendation?.recommendation?.content_type ?? recommendation?.data?.recommendation?.content_type ?? '—'}</span>
-                      </div>
-                    </div>
-
-                    <div className="col-span-1 flex items-start space-x-2 md:justify-end">
-                      <button onClick={() => handleApplyRecommendation(recommendation)} className="inline-flex items-center rounded-md bg-green-600 px-3 py-2 text-sm font-semibold text-white hover:bg-green-500">
-                        Apply
-                      </button>
-                      <button onClick={() => setShowRecDetails(d => !d)} className="inline-flex items-center rounded-md border px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-200">
-                        {showRecDetails ? 'Hide details' : 'Details'}
-                      </button>
-                    </div>
-
-                    {showRecDetails && (
-                      <div className="col-span-full mt-3 text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-3 rounded">
-                        <div className="mb-2"><strong>Specific:</strong> {recommendation?.recommendation?.specific ?? recommendation?.data?.recommendation?.specific ?? '—'}</div>
-                        <div><strong>Explanation:</strong> {recommendation?.explanation ?? recommendation?.data?.explanation ?? 'No explanation provided.'}</div>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="mt-4 text-sm text-gray-500">No recommendation yet — click Get Recommendation or end session to request automatically.</div>
-                )}
-              </div>
-            </div>
+            
 
             {/* Active Session Dashboard */}
             {currentModule && (
@@ -1568,6 +1599,68 @@ const EnhancedLearning = () => {
               </div>
             </div>
           </motion.div>
+          {/* Recommendation panel (model-backed) - moved to sidebar */}
+          <div className="mt-6">
+            <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Personalized Recommendation</h3>
+                  <p className="text-sm text-gray-500 mt-1">Model-backed suggestion to help the learner now.</p>
+                </div>
+                <div>
+                  <button
+                    onClick={requestModelRecommendation}
+                    disabled={recLoading}
+                    className="inline-flex items-center space-x-2 rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+                  >
+                    {recLoading ? <Spinner className="w-4 h-4 text-white" /> : <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none"><path d="M12 2v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                    <span>{recLoading ? 'Requesting...' : 'Get Recommendation'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {recommendation ? (
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
+                  <div className="col-span-1 flex items-center space-x-3">
+                    <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white">
+                      <Lightbulb className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <div className="text-sm font-semibold text-gray-900 dark:text-white">{recommendation?.recommendation?.action ?? recommendation?.data?.recommendation?.action ?? 'Suggested action'}</div>
+                      <div className="text-xs text-gray-500 mt-1">{recommendation?.recommendation?.content_type ?? recommendation?.data?.recommendation?.content_type ?? ''}</div>
+                    </div>
+                  </div>
+
+                  <div className="col-span-1">
+                    <div className="mb-2 text-xs text-gray-500">Confidence</div>
+                    <ConfidenceBar value={(recommendation?.recommendation?.confidence ?? recommendation?.data?.recommendation?.confidence) || 0} />
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <span className="px-2 py-1 bg-gray-100 dark:bg-gray-700 text-xs rounded">Model: {String(recommendation?.model_based ?? recommendation?.data?.model_based ?? false)}</span>
+                      <span className="px-2 py-1 bg-gray-100 dark:bg-gray-700 text-xs rounded">Type: {recommendation?.recommendation?.content_type ?? recommendation?.data?.recommendation?.content_type ?? '—'}</span>
+                    </div>
+                  </div>
+
+                  <div className="col-span-1 flex items-start space-x-2 md:justify-end">
+                    <button onClick={() => handleApplyRecommendation(recommendation)} className="inline-flex items-center rounded-md bg-green-600 px-3 py-2 text-sm font-semibold text-white hover:bg-green-500">
+                      Apply
+                    </button>
+                    <button onClick={() => setShowRecDetails(d => !d)} className="inline-flex items-center rounded-md border px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-200">
+                      {showRecDetails ? 'Hide details' : 'Details'}
+                    </button>
+                  </div>
+
+                  {showRecDetails && (
+                    <div className="col-span-full mt-3 text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 p-3 rounded">
+                      <div className="mb-2"><strong>Specific:</strong> {recommendation?.recommendation?.specific ?? recommendation?.data?.recommendation?.specific ?? '—'}</div>
+                      <div><strong>Explanation:</strong> {recommendation?.explanation ?? recommendation?.data?.explanation ?? 'No explanation provided.'}</div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-4 text-sm text-gray-500">No recommendation yet — click Get Recommendation or end session to request automatically.</div>
+              )}
+            </div>
+          </div>
 
           {/* Generated Content */}
           {(generatedQuizzes.length > 0 || learningPaths.length > 0) && (
@@ -1676,23 +1769,83 @@ const EnhancedLearning = () => {
       {/* Create Module Modal (inline, not alert) */}
       {showCreateModuleModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black opacity-40" onClick={() => { setShowCreateModuleModal(false); setPendingAction(null) }} />
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 z-50 w-full max-w-md">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">Create a module to continue</h3>
-            <div className="space-y-3">
-              <input className="w-full px-3 py-2 rounded border dark:bg-gray-900" placeholder="Module title" value={newModuleTitle} onChange={e => setNewModuleTitle(e.target.value)} />
-              <div className="flex gap-2">
-                <select value={newModuleDifficulty} onChange={e => setNewModuleDifficulty(e.target.value)} className="flex-1 px-3 py-2 rounded border dark:bg-gray-900">
-                  <option value="beginner">beginner</option>
-                  <option value="intermediate">intermediate</option>
-                  <option value="advanced">advanced</option>
-                </select>
-                <input className="w-32 px-3 py-2 rounded border dark:bg-gray-900" value={newModuleDuration} onChange={e => setNewModuleDuration(e.target.value)} />
+          <div className="absolute inset-0 bg-black opacity-40" onClick={() => { setShowCreateModuleModal(false); setPendingAction(null); setSelectedModuleId(null) }} />
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 z-50 w-full max-w-2xl">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">Pick or create a module to continue</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <div className="text-sm text-gray-600 mb-2">Select existing module</div>
+                <div className="max-h-56 overflow-auto border rounded p-2 bg-gray-50 dark:bg-gray-900">
+                  {modules.length === 0 && <div className="text-xs text-gray-500">No existing modules</div>}
+                  {modules.map(m => (
+                    <label key={m.id} className={`flex items-center justify-between p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 ${String(selectedModuleId) === String(m.id) ? 'bg-primary-50 dark:bg-primary-900/20' : ''}`}>
+                      <div>
+                        <div className="text-sm font-medium text-gray-900 dark:text-white">{m.title}</div>
+                        <div className="text-xs text-gray-500">{m.difficulty} • {m.duration} min</div>
+                      </div>
+                      <input type="radio" name="selectedModule" checked={String(selectedModuleId) === String(m.id)} onChange={() => setSelectedModuleId(m.id)} />
+                    </label>
+                  ))}
+                </div>
+                <div className="text-xs text-gray-500 mt-2">Or create a new module on the right</div>
               </div>
-              <div className="flex justify-end gap-2 mt-2">
-                <button onClick={() => { setShowCreateModuleModal(false); setPendingAction(null) }} className="px-3 py-2 rounded bg-gray-100 dark:bg-gray-700">Cancel</button>
-                <button onClick={submitCreateModuleFromModal} className="px-3 py-2 rounded bg-indigo-600 text-white">Create & Continue</button>
+
+              <div>
+                <div className="text-sm text-gray-600 mb-2">Create new module</div>
+                <div className="space-y-3">
+                  <input className="w-full px-3 py-2 rounded border dark:bg-gray-900" placeholder="Module title" value={newModuleTitle} onChange={e => setNewModuleTitle(e.target.value)} />
+                  <div className="flex gap-2">
+                    <select value={newModuleDifficulty} onChange={e => setNewModuleDifficulty(e.target.value)} className="flex-1 px-3 py-2 rounded border dark:bg-gray-900">
+                      <option value="beginner">beginner</option>
+                      <option value="intermediate">intermediate</option>
+                      <option value="advanced">advanced</option>
+                    </select>
+                    <input className="w-32 px-3 py-2 rounded border dark:bg-gray-900" value={newModuleDuration} onChange={e => setNewModuleDuration(e.target.value)} />
+                  </div>
+                  <div className="text-xs text-gray-500">You can either pick an existing module or create a new one.</div>
+                </div>
               </div>
+            </div>
+
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => { setShowCreateModuleModal(false); setPendingAction(null); setSelectedModuleId(null) }} className="px-3 py-2 rounded bg-gray-100 dark:bg-gray-700">Cancel</button>
+              <button onClick={submitCreateModuleFromModal} className="px-3 py-2 rounded bg-indigo-600 text-white">Confirm</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Missing raw-data modal: shown when backend skipped model and user chose Option A */}
+      {showMissingDataModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black opacity-40" onClick={() => { setShowMissingDataModal(false); setAskedForMissingData(false) }} />
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 z-50 w-full max-w-2xl">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">We need a few details to use the ML model</h3>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">The model needs specific raw feature values. Please review or correct values below and retry to get a model-backed recommendation.</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-72 overflow-auto mb-4">
+              {MODEL_NUMERIC_FIELDS.map(f => (
+                <div key={f} className="flex flex-col">
+                  <label className="text-xs text-gray-600 mb-1">{f}</label>
+                  <input type="number" value={rawFeatureForm[f] ?? ''} onChange={e => setRawFeatureForm(prev => ({ ...prev, [f]: e.target.value }))} className="px-3 py-2 rounded border dark:bg-gray-900" />
+                </div>
+              ))}
+
+              {Object.keys(MODEL_CATEGORICAL_OPTIONS).map(field => (
+                <div key={field} className="flex flex-col">
+                  <label className="text-xs text-gray-600 mb-1">{field}</label>
+                  <select value={rawFeatureForm[field] ?? ''} onChange={e => setRawFeatureForm(prev => ({ ...prev, [field]: e.target.value }))} className="px-3 py-2 rounded border dark:bg-gray-900">
+                    <option value="">(select)</option>
+                    {MODEL_CATEGORICAL_OPTIONS[field].map(opt => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={() => { setShowMissingDataModal(false); setAskedForMissingData(false) }} className="px-3 py-2 rounded bg-gray-100 dark:bg-gray-700">Cancel</button>
+              <button onClick={submitMissingDataAndRetry} className="px-3 py-2 rounded bg-indigo-600 text-white">Retry recommendation</button>
             </div>
           </div>
         </div>
