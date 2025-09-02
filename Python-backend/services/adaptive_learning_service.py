@@ -138,36 +138,51 @@ class AdaptiveLearningService:
             model = get_model()
             info = model.info()
             if info.get("available"):
-                # Build feature dict expected by the model. We'll use simple keys.
+                # Build a feature dict and attempt to map it to the model's
+                # expected raw columns. If overlap is insufficient we'll skip
+                # model inference and fall back to heuristics.
                 features = {
                     "score": float(performance.get("score", 0)),
                     "time_taken": float(performance.get("time_taken", 0)),
                     "mistake_count": float(len(mistakes))
                 }
-                pred = model.predict(features)
-                # Map numeric prediction to actions (0-100 -> categories)
-                if pred >= 85:
-                    action = "advance"
-                    content_type = "challenging_exercises"
-                elif pred >= 70:
-                    action = "continue"
-                    content_type = "practice_exercises"
-                elif pred >= 50:
-                    action = "practice"
-                    content_type = "worked_examples"
+
+                # If the model exposes raw_columns we can try to provide
+                # values for them. Otherwise we'll rely on whatever saved
+                # columns the model reports.
+                expected = getattr(model, "raw_columns", None)
+                provided = set(features.keys())
+                if not expected:
+                    logger.info("Model available but no raw_columns metadata present; skipping model to avoid incompatible input shapes.")
                 else:
-                    action = "review"
-                    content_type = "simplified_explanation"
+                    overlap = sum(1 for c in expected if c in provided)
+                    if overlap < max(1, len(expected) // 4):
+                        logger.info("Model available but provided features don't match expected raw columns (overlap=%s). Skipping model.", overlap)
+                    else:
+                        pred = model.predict(features)
+                        # Map numeric prediction to actions (0-100 -> categories)
+                        if pred >= 85:
+                            action = "advance"
+                            content_type = "challenging_exercises"
+                        elif pred >= 70:
+                            action = "continue"
+                            content_type = "practice_exercises"
+                        elif pred >= 50:
+                            action = "practice"
+                            content_type = "worked_examples"
+                        else:
+                            action = "review"
+                            content_type = "simplified_explanation"
 
-                recs = self._specific_recommendations(action, mistakes)
+                        recs = self._specific_recommendations(action, mistakes)
 
-                return {
-                    "success": True,
-                    "model_based": True,
-                    "model_info": info,
-                    "recommendation": {"action": action, "content_type": content_type, "specific": recs},
-                    "confidence": round(min(1.0, 0.5 + abs(pred - 50) / 100), 2),
-                }
+                        return {
+                            "success": True,
+                            "model_based": True,
+                            "model_info": info,
+                            "recommendation": {"action": action, "content_type": content_type, "specific": recs},
+                            "confidence": round(min(1.0, 0.5 + abs(pred - 50) / 100), 2),
+                        }
         except Exception:
             # Fall back to heuristics below
             logger.exception("Model-based recommendation failed, falling back to heuristics")

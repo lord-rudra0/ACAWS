@@ -292,8 +292,20 @@ async def recommend_learning(
         user_id = request_data.get("user_id", "anonymous")
         performance = request_data.get("performance", {})
 
+        # If caller provided raw_features (student attributes) prefer that as
+        # the input to the model. This lets frontend send richer data when
+        # available so the advanced pipeline (which expects student raw
+        # columns) can be used.
+        raw = performance.get("raw_features")
+        if isinstance(raw, dict) and raw:
+            # merge the simple summary metrics into raw features
+            merged = {**raw, "score": float(performance.get("score", 0)), "time_taken": float(performance.get("time_taken", 0)), "mistake_count": float(len(performance.get("mistakes", [])))}
+            perf_input = merged
+        else:
+            perf_input = performance
+
         # Use shared singleton service instance which will itself try model first
-        result = await adaptive_service.recommend_next_content(user_id, performance)
+        result = await adaptive_service.recommend_next_content(user_id, perf_input)
 
         # Persist request for analytics (best-effort)
         try:
