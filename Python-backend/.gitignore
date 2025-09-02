@@ -159,3 +159,9 @@ cython_debug/
 .env.*
 
 .venv/
+
+# Pip installation logs and temporary files
+*=*
+pip-*.txt
+pip-delete-this-directory.txt
+*.whl

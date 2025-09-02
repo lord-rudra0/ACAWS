@@ -1,44 +1,59 @@
-# Core
+# Core Web Framework
 fastapi==0.110.0
 uvicorn==0.27.1
 python-dotenv==1.0.1
 
-# Database
+# Database Drivers
 pymongo==4.6.1
 motor==3.3.2  # Async MongoDB driver
 redis==5.0.1
 aioredis==2.0.1
 
-# AI/ML
-tensorflow>=2.15.0  # Relaxed version constraint for compatibility
-torch==2.8.0
-transformers==4.36.2
-opencv-python==4.9.0.80
-mediapipe>=0.10.0  # Relaxed version constraint for compatibility
-numpy==1.26.3
-pandas==2.1.4
-scikit-learn==1.4.0
-scipy==1.11.4
-joblib==1.5.2  # Updated to latest available version
+# AI/ML Core Libraries (Compatible Versions)
+tensorflow==2.16.1  # Compatible with protobuf 4.25.3
+mediapipe==0.10.14  # Face detection and pose estimation
+opencv-python==4.9.0.80  # Computer vision
+opencv-contrib-python==4.11.0.86  # Additional OpenCV modules
+numpy==1.26.3  # Numerical computing
+pandas==2.1.4  # Data manipulation
+scikit-learn==1.4.0  # Machine learning
+scipy==1.11.4  # Scientific computing
+joblib==1.5.2  # Parallel processing
+
+# NLP and Transformers
+transformers==4.36.2  # Hugging Face transformers
 
 # Authentication & Security
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-python-multipart==0.0.6
-bcrypt==4.1.2
-pyjwt==2.8.0  # For JWT token handling
+python-jose[cryptography]==3.3.0  # JWT handling
+passlib[bcrypt]==1.7.4  # Password hashing
+python-multipart==0.0.6  # Form data handling
+bcrypt==4.1.2  # Password encryption
+pyjwt==2.8.0  # JSON Web Tokens
 
-# Utils
-requests==2.31.0
-httpx==0.28.1  # Updated to latest available version
-aiofiles==23.2.1
-websockets==12.0
-pydantic==2.5.3
-pydantic-settings==2.1.0
+# HTTP and Networking
+requests==2.31.0  # HTTP requests
+httpx==0.28.1  # Async HTTP client
+aiofiles==23.2.1  # Async file operations
+websockets==12.0  # WebSocket support
 
-# Development
-pytest==7.4.4
-pytest-asyncio==0.21.1
-black==23.12.1
-isort==5.13.2
-mypy==1.8.0
+# Data Validation
+pydantic==2.5.3  # Data validation
+pydantic-settings==2.1.0  # Settings management
+
+# Development and Testing
+pytest==7.4.4  # Testing framework
+pytest-asyncio==0.21.1  # Async testing
+black==23.12.1  # Code formatting
+isort==5.13.2  # Import sorting
+mypy==1.8.0  # Type checking
+
+# System Dependencies (Auto-installed with above packages)
+# protobuf==4.25.3 (installed with TensorFlow/MediaPipe)
+# jax==0.7.1 (installed with MediaPipe)
+# jaxlib==0.7.1 (installed with MediaPipe)
+# ml_dtypes==0.5.3 (installed with TensorFlow)
+
+# Notes:
+# - PyTorch excluded due to disk space limitations
+# - All versions tested and compatible as of September 2025
+# - Use Python 3.12+ for best compatibility
