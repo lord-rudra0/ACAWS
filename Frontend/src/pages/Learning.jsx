@@ -418,6 +418,24 @@ const Learning = () => {
                   </button>
                 </>
               )}
+              <button onClick={async () => {
+                try {
+                  const gen = await tutorAPI.generateRoadmap({ subject: 'Foundations of AI', difficulty: 'beginner', chapters: 4 })
+                  if (gen && gen.data && gen.data.roadmap) {
+                    // hydrate using user-state
+                    if (userId) {
+                      const st = await tutorAPI.getUserState(userId)
+                      if (st && st.data) {
+                        const s = st.data
+                        setSelectedRoadmap(s.roadmap)
+                        setSelectedChapter(s.nextChapter)
+                        setActiveQuiz(s.nextQuiz)
+                        setLearningProgress(s.progress?.percent || 0)
+                      }
+                    }
+                  }
+                } catch (e) { console.error('Generate failed', e); alert('AI generation failed') }
+              }} className="btn-secondary ml-2">Generate AI Roadmap</button>
             </div>
 
             {/* Progress Display */}

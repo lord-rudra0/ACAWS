@@ -418,6 +418,15 @@ tutorAPI.getUserState = async (userId, roadmapId = null) => {
   }
 }
 
+tutorAPI.generateRoadmap = async (opts = {}) => {
+  try {
+    const response = await expressAPI.post('/api/tutor/generate', opts)
+    return response.data
+  } catch (err) {
+    throw new Error(err.message || 'Failed to generate roadmap')
+  }
+}
+
 export const wellnessAPI = {
   recordEntry: async (entryData) => {
     try {

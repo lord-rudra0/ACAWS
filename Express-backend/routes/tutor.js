@@ -1,5 +1,6 @@
 import express from 'express'
 import tutorService from '../services/tutorService.js'
+import { sendPrompt } from '../utils/geminiClient.js'
 
 const router = express.Router()
 
@@ -99,6 +100,40 @@ router.post('/seed-sample', async (req, res) => {
   } catch (err) {
     console.error('POST /tutor/seed-sample', err)
     res.status(500).json({ ok: false, error: 'seeding failed' })
+  }
+})
+
+// Generate an AI roadmap (server-side) and persist
+router.post('/generate', async (req, res) => {
+  try {
+    const { subject = 'Introduction to AI', difficulty = 'beginner', chapters = 5 } = req.body || {}
+    // Construct a prompt for the AI to produce a JSON roadmap with chapters and quizzes
+    const prompt = `Generate a learning roadmap for subject: "${subject}" with difficulty "${difficulty}" containing ${chapters} chapters. Output ONLY valid JSON with keys: title, description, chapters. Each chapter should be an object with keys: title, content (html), position, quizzes (array). Each quiz should have: title, questions (array of question objects). Each question: question, choices (array), correctIndex (number), points (number). Keep content concise.`
+
+    const out = await sendPrompt({ prompt })
+    const jsonMatch = out.text.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) return res.status(500).json({ ok: false, error: 'AI did not return JSON' })
+    let parsed
+    try { parsed = JSON.parse(jsonMatch[0]) } catch (e) { return res.status(500).json({ ok: false, error: 'Failed to parse AI JSON' }) }
+
+    // Persist roadmap and nested docs
+    const rd = await tutorService.createRoadmap({ title: parsed.title || subject, description: parsed.description || '' })
+    for (const ch of parsed.chapters || []) {
+      const chDoc = await tutorService.createChapter({ title: ch.title, content: ch.content, position: ch.position || 0 })
+      const quizIds = []
+      for (const q of ch.quizzes || []) {
+        const qDoc = await tutorService.createQuiz(q)
+        quizIds.push(qDoc._id)
+      }
+      chDoc.quizzes = quizIds
+      await chDoc.save()
+      rd.chapters.push(chDoc._id)
+    }
+    await rd.save()
+    res.json({ ok: true, roadmap: rd })
+  } catch (err) {
+    console.error('POST /tutor/generate failed', err)
+    res.status(500).json({ ok: false, error: 'generation failed' })
   }
 })
 
