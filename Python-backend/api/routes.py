@@ -18,6 +18,7 @@ if not MINIMAL_BOOT:
     from services.wellness_service import WellnessService
     from services.wellness_ml_model import wellness_ml_model
     from services.cognitive_monitoring import cognitive_monitor
+    from services.enhanced_cognitive import enhanced_cognitive
 else:
     # Lightweight stubs to avoid heavy deps in minimal boot
     class EmotionAnalysisService:
@@ -674,4 +675,28 @@ async def analyze_cognitive_realtime(payload: RealtimeSignals):
 
     except Exception as e:
         logger.error(f"Cognitive realtime analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Enhanced cognitive analysis endpoint (no auth for dev)
+@analytics_router.post('/enhanced/analyze')
+async def enhanced_analyze(payload: Dict):
+    """Call the enhanced cognitive analyzer service with a camera frame payload."""
+    try:
+        # The analyzer expects a dict with 'frame' key (data URL)
+        summary = await enhanced_cognitive.analyze_realtime(payload)
+
+        # Best-effort persistence
+        try:
+            await log_generic('enhanced_analysis', user_id=None, payload={'request': payload, 'summary': summary})
+        except Exception as e:
+            logger.debug('Persistence of enhanced analysis failed: %s', e)
+
+        return {
+            'success': True,
+            'summary': summary
+        }
+
+    except Exception as e:
+        logger.error(f'Enhanced analyze endpoint failed: {e}')
         raise HTTPException(status_code=500, detail=str(e))

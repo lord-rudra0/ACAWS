@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Camera, Eye, Brain, Heart, Zap, Settings, AlertTriangle, Target, Activity } from 'lucide-react'
 import advancedMLService from '../services/advancedMLService'
 import geminiService from '../services/geminiService'
-import { pythonAPI } from '../services/api'
+import enhancedCognitiveAPI from '../services/enhancedCognitive'
 import useWebSocket from '../hooks/useWebSocket'
 import useErrorHandler from '../hooks/useErrorHandler'
 
@@ -42,8 +42,8 @@ const EnhancedCameraAnalysis = ({
     attentionConsistency: 0
   })
   const [realTimeInsights, setRealTimeInsights] = useState([])
-  const [monitorSummary, setMonitorSummary] = useState(null)
   const [consentGiven, setConsentGiven] = useState(false)
+  const [enhancedSummary, setEnhancedSummary] = useState(null)
   const { error, handleAsync, clearError } = useErrorHandler()
 
   const analysisModes = [
@@ -141,6 +141,18 @@ const EnhancedCameraAnalysis = ({
       else tasks.push(advancedMLService.analyzeAttentionAdvanced(imageSrc, { userProfile, analysisMode })) // still call but service may fallback to mock without network
       tasks.push(analyzeFatigueAdvanced(imageSrc))
 
+      // Add enhanced cognitive analysis if remote is enabled
+      let enhancedSummary = null
+      if (useRemote) {
+        try {
+          const enhancedResult = await enhancedCognitiveAPI.analyze({ frame: imageSrc })
+          enhancedSummary = enhancedResult?.summary || null
+          console.log('Enhanced cognitive summary:', enhancedSummary)
+        } catch (err) {
+          console.error('Enhanced cognitive analysis failed:', err)
+        }
+      }
+
       const [emotionResult, attentionResult, fatigueResult] = await Promise.allSettled(tasks)
 
       const processingTime = Date.now() - startTime
@@ -149,6 +161,11 @@ const EnhancedCameraAnalysis = ({
       const emotion = emotionResult.status === 'fulfilled' ? emotionResult.value : null
       const attention = attentionResult.status === 'fulfilled' ? attentionResult.value : null
       const fatigue = fatigueResult.status === 'fulfilled' ? fatigueResult.value : null
+
+      // Set enhanced summary if available
+      if (enhancedSummary) {
+        setEnhancedSummary(enhancedSummary)
+      }
 
       // Debug logs to verify backend attention flow
       try {
@@ -189,32 +206,6 @@ const EnhancedCameraAnalysis = ({
       // Update advanced metrics
       updateAdvancedMetrics(emotion, attention, fatigue)
 
-      // Fetch backend cognitive monitor summary when remote allowed
-      if (!onDeviceOnly) {
-        try {
-          // Build a compact signals payload from computed state
-          const signals = {
-            attention: advancedCognitiveState.attention,
-            engagement: advancedCognitiveState.engagement,
-            cognitive_load: advancedCognitiveState.cognitiveLoad,
-            emotional_state: advancedCognitiveState.mood || advancedCognitiveState.emotionalStability
-          }
-
-          // Fire-and-forget but await result to update UI
-          const resp = await pythonAPI.post('/api/analytics/monitor/analyze', {
-            user_id: userProfile?.id || userProfile?.userId || 'anonymous',
-            signals,
-            metadata: { source: 'enhanced_camera' }
-          })
-
-          // axios returns data in .data or the route may return the body directly
-          const body = resp?.data || resp
-          setMonitorSummary(body?.summary || body)
-        } catch (err) {
-          console.warn('Cognitive monitor call failed:', err)
-        }
-      }
-
       // Generate real-time insights
       if ((analysisMode === 'comprehensive' || analysisMode === 'research') && !onDeviceOnly) {
         await generateRealTimeInsights(advancedCognitiveState)
@@ -227,7 +218,11 @@ const EnhancedCameraAnalysis = ({
 
       // Update parent component
       if (onCognitiveStateUpdate) {
-        onCognitiveStateUpdate(advancedCognitiveState)
+        const stateToUpdate = enhancedSummary ? {
+          ...advancedCognitiveState,
+          enhancedSummary
+        } : advancedCognitiveState
+        onCognitiveStateUpdate(stateToUpdate)
       }
 
       // Send advanced insights to parent
@@ -672,39 +667,43 @@ const EnhancedCameraAnalysis = ({
         {/* Advanced Metrics Dashboard */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           {[
-              {
-                label: 'Attention',
-                value: monitorSummary?.metrics?.attention?.raw_value ?? analysisData.attention?.attentionScore ?? null,
-                icon: Eye,
-                color: 'blue',
-                advanced: monitorSummary?.metrics?.attention?.quality ?? analysisData.attention?.focusMap?.focusStability ?? null,
-                unit: '%'
-              },
-              {
-                label: 'Cognitive Load',
-                value: monitorSummary?.metrics?.cognitive_load?.raw_value ?? advancedMetrics.cognitiveLoad ?? null,
-                icon: Brain,
-                color: 'purple',
-                advanced: monitorSummary?.metrics?.cognitive_load?.quality ?? (analysisData.attention?.cognitiveLoad?.level != null ? analysisData.attention.cognitiveLoad.level * 100 : null),
-                unit: '%'
-              },
-              {
-                label: 'Engagement',
-                value: monitorSummary?.metrics?.engagement?.raw_value ?? (analysisData.attention?.engagementLevel != null ? analysisData.attention.engagementLevel * 100 : null),
-                icon: Zap,
-                color: 'green',
-                advanced: monitorSummary?.metrics?.engagement?.quality ?? calculateEngagementQuality(analysisData.attention),
-                unit: '%'
-              },
-              {
-                label: 'Emotional State',
-                value: monitorSummary?.metrics?.emotional_state?.raw_value ?? advancedMetrics.emotionalStability ?? null,
-                icon: Heart,
-                color: 'red',
-                advanced: monitorSummary?.metrics?.emotional_state?.quality ?? (analysisData.emotion?.emotionIntensity?.overall != null ? analysisData.emotion.emotionIntensity.overall * 100 : null),
-                unit: '%'
-              }
-            ].map((metric) => {
+            {
+              label: 'Attention',
+              value: enhancedSummary?.metrics?.attention?.raw_value ?? analysisData.attention?.attentionScore ?? null,
+              icon: Eye,
+              color: 'blue',
+              advanced: enhancedSummary?.metrics?.attention?.quality ?? null,
+              unit: '%',
+              trend: enhancedSummary?.metrics?.attention?.trend ?? '→ Stable'
+            },
+            {
+              label: 'Cognitive Load',
+              value: enhancedSummary?.metrics?.cognitive_load?.raw_value ?? advancedMetrics.cognitiveLoad ?? null,
+              icon: Brain,
+              color: 'purple',
+              advanced: enhancedSummary?.metrics?.cognitive_load?.quality ?? null,
+              unit: '%',
+              trend: enhancedSummary?.metrics?.cognitive_load?.trend ?? '→ Stable'
+            },
+            {
+              label: 'Engagement',
+              value: enhancedSummary?.metrics?.engagement?.raw_value ?? (analysisData.attention?.engagementLevel != null ? analysisData.attention.engagementLevel * 100 : null),
+              icon: Zap,
+              color: 'green',
+              advanced: enhancedSummary?.metrics?.engagement?.quality ?? null,
+              unit: '%',
+              trend: enhancedSummary?.metrics?.engagement?.trend ?? '→ Stable'
+            },
+            {
+              label: 'Emotional State',
+              value: enhancedSummary?.metrics?.emotional_state?.current ?? advancedMetrics.emotionalStability ?? null,
+              icon: Heart,
+              color: 'red',
+              advanced: enhancedSummary?.metrics?.emotional_state?.quality ?? null,
+              unit: '',
+              trend: enhancedSummary?.metrics?.emotional_state?.trend ?? '→ Stable'
+            }
+          ].map((metric) => {
             const Icon = metric.icon
             return (
               <div key={metric.label} className="text-center group relative">
@@ -718,14 +717,14 @@ const EnhancedCameraAnalysis = ({
                   {metric.label}
                 </div>
                 <div className="text-xs text-gray-500 dark:text-gray-400">
-                  Quality: {fmt(metric.advanced, metric.unit)}
+                  Quality: {metric.advanced || '—'}
                 </div>
                 
                 {/* Advanced Tooltip */}
                 <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-900 text-white text-xs rounded-lg p-2 whitespace-nowrap z-10">
                   <div>Current: {fmt(metric.value, metric.unit)}</div>
-                  <div>Quality: {fmt(metric.advanced, metric.unit)}</div>
-                  <div>Trend: {getTrendDirection(metric.label)}</div>
+                  <div>Quality: {metric.advanced || '—'}</div>
+                  <div>Trend: {metric.trend}</div>
                 </div>
               </div>
             )
