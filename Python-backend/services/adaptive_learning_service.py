@@ -2,6 +2,7 @@ import logging
 from typing import Dict, List, Optional
 from datetime import datetime
 import statistics
+from services.learning_model import get_model
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +130,50 @@ class AdaptiveLearningService:
 
         performance expected keys: score (0-100), time_taken (seconds), mistakes (list).
         """
-        score = performance.get("score", 0)
+        score = performance.get("score", None)
         mistakes = performance.get("mistakes", [])
 
+        # Try model-backed recommendation first
+        try:
+            model = get_model()
+            info = model.info()
+            if info.get("available"):
+                # Build feature dict expected by the model. We'll use simple keys.
+                features = {
+                    "score": float(performance.get("score", 0)),
+                    "time_taken": float(performance.get("time_taken", 0)),
+                    "mistake_count": float(len(mistakes))
+                }
+                pred = model.predict(features)
+                # Map numeric prediction to actions (0-100 -> categories)
+                if pred >= 85:
+                    action = "advance"
+                    content_type = "challenging_exercises"
+                elif pred >= 70:
+                    action = "continue"
+                    content_type = "practice_exercises"
+                elif pred >= 50:
+                    action = "practice"
+                    content_type = "worked_examples"
+                else:
+                    action = "review"
+                    content_type = "simplified_explanation"
+
+                recs = self._specific_recommendations(action, mistakes)
+
+                return {
+                    "success": True,
+                    "model_based": True,
+                    "model_info": info,
+                    "recommendation": {"action": action, "content_type": content_type, "specific": recs},
+                    "confidence": round(min(1.0, 0.5 + abs(pred - 50) / 100), 2),
+                }
+        except Exception:
+            # Fall back to heuristics below
+            logger.exception("Model-based recommendation failed, falling back to heuristics")
+
+        # Heuristic fallback (existing logic)
+        score = score if score is not None else performance.get("score", 0)
         if score >= 85:
             action = "advance"
             content_type = "challenging_exercises"
@@ -149,12 +191,9 @@ class AdaptiveLearningService:
 
         return {
             "success": True,
-            "recommendation": {
-                "action": action,
-                "content_type": content_type,
-                "specific": recs
-            },
-            "confidence": round(min(1.0, 0.5 + abs(score - 50) / 100), 2)
+            "model_based": False,
+            "recommendation": {"action": action, "content_type": content_type, "specific": recs},
+            "confidence": round(min(1.0, 0.5 + abs(score - 50) / 100), 2),
         }
 
     async def analyze_learning_patterns(self, user_id: str) -> Dict:

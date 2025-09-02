@@ -275,6 +275,42 @@ async def recommend_next_content(
         logger.error(f"Content recommendation endpoint failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# New unauthenticated endpoint: model-backed recommendation
+@learning_router.post("/recommend")
+async def recommend_learning(
+    request_data: Dict
+):
+    """Return a recommended next content item using the trained model if available.
+
+    request_data should be a JSON object like:
+      { "user_id": "user123", "performance": { "score": 78, "time_taken": 300, "mistakes": [] } }
+
+    No authentication required in development.
+    """
+    try:
+        user_id = request_data.get("user_id", "anonymous")
+        performance = request_data.get("performance", {})
+
+        # Use shared singleton service instance which will itself try model first
+        result = await adaptive_service.recommend_next_content(user_id, performance)
+
+        # Persist request for analytics (best-effort)
+        try:
+            await log_generic("learning_recommendations", user_id=user_id, payload={"request": request_data, "result": result})
+        except Exception as e:
+            logger.error(f"Recommendation persistence failed: {e}")
+
+        return {
+            "success": True,
+            "data": result,
+            "user_id": user_id
+        }
+
+    except Exception as e:
+        logger.error(f"Learning recommendation endpoint failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Wellness Routes
 @wellness_router.post("/track-metrics")
 async def track_wellness_metrics(
