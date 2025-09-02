@@ -25,6 +25,7 @@ import Roadmap from '../components/tutor/Roadmap'
 import Chapter from '../components/tutor/Chapter'
 import Quiz from '../components/tutor/Quiz'
 import ProgressChart from '../components/tutor/ProgressChart'
+import ModulePicker from '../components/tutor/ModulePicker'
 import { tutorAPI } from '../services/api'
 import useWebSocket from '../hooks/useWebSocket'
 import useErrorHandler from '../hooks/useErrorHandler'
@@ -178,6 +179,14 @@ const Learning = () => {
     } catch (err) {
       console.error('Failed to load roadmaps', err)
     }
+  }
+
+  const handleModuleCreated = (created) => {
+    // Accept server response shape variations
+    const roadmap = created.roadmap || created.data || created
+    if (!roadmap) return
+    setRoadmaps(prev => [roadmap, ...prev])
+    setSelectedRoadmap(roadmap)
   }
 
   // Start learning session
@@ -460,6 +469,8 @@ const Learning = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Left Column - Learning Content */}
           <div className="lg:col-span-2 space-y-6">
+              {/* Module Picker */}
+              <ModulePicker onCreated={handleModuleCreated} />
             {/* Current Module / Chapter Display */}
             {selectedRoadmap && (
               <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6">

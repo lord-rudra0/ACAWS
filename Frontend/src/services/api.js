@@ -380,6 +380,15 @@ export const tutorAPI = {
     }
   },
 
+  createRoadmap: async (roadmapData) => {
+    try {
+      const response = await expressAPI.post('/api/tutor/roadmaps', roadmapData)
+      return response.data
+    } catch (error) {
+      throw new Error(error.message || 'Failed to create roadmap')
+    }
+  },
+
   getProgress: async (roadmapId, userId) => {
     try {
       const response = await expressAPI.get(`/api/tutor/roadmaps/${roadmapId}/progress`, { params: { user_id: userId } })
