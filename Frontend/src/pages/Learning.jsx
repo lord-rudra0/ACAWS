@@ -103,7 +103,26 @@ const Learning = () => {
   useEffect(() => {
     loadLearningModules()
     loadLearningStats()
-  loadRoadmaps()
+    // hydrate tutor state if user is known
+    ;(async () => {
+      try {
+        if (userId) {
+          const res = await tutorAPI.getUserState(userId)
+          if (res && res.data) {
+            const st = res.data
+            if (st.roadmap) setSelectedRoadmap(st.roadmap)
+            if (st.nextChapter) setSelectedChapter(st.nextChapter)
+            if (st.nextQuiz) setActiveQuiz(st.nextQuiz)
+            if (st.progress) setLearningProgress(st.progress.percent || 0)
+          }
+        } else {
+          loadRoadmaps()
+        }
+      } catch (e) {
+        console.error('Hydration failed', e)
+        loadRoadmaps()
+      }
+    })()
   }, [])
 
   // Session timer effect

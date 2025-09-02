@@ -31,7 +31,7 @@
   }
   
   .btn-primary {
-    @apply bg-primary-500 hover:bg-primary-600 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 shadow-md hover:shadow-lg;
+  @apply bg-primary-500 hover:bg-primary-600 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 shadow-md hover:shadow-lg transform-gpu hover:scale-[1.02] active:scale-98;
   }
   
   .btn-secondary {
@@ -41,6 +41,20 @@
   .input-field {
     @apply w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white transition-colors duration-200;
   }
+}
+
+:root {
+  --brand-primary: 77 70 229; /* rgb values for tailwind primary-500 */
+  --brand-accent: 16 185 129;
+  --ui-radius: 12px;
+}
+
+.micro-interaction {
+  transition: transform 160ms cubic-bezier(.2,.9,.3,1), box-shadow 160ms;
+}
+
+.btn-focus-ring:focus {
+  box-shadow: 0 6px 18px rgba(var(--brand-primary), 0.12), 0 0 0 4px rgba(var(--brand-primary), 0.08);
 }
 
 .theme-transition {

@@ -52,6 +52,56 @@ router.get('/roadmaps/:id/recommend', async (req, res) => {
   }
 })
 
+// Composite user-state endpoint for fast frontend hydration
+router.get('/user-state', async (req, res) => {
+  try {
+    const userId = req.user?.id || req.query.user_id || null
+    const roadmapId = req.query.roadmap_id || null
+    if (!userId) return res.status(400).json({ ok: false, error: 'user_id required' })
+    const state = await tutorService.getUserState(userId, roadmapId)
+    res.json({ ok: true, data: state })
+  } catch (err) {
+    console.error('GET /tutor/user-state', err)
+    res.status(500).json({ ok: false, error: 'failed to compute user state' })
+  }
+})
+
+// Get scheduled reviews for a user (questions due)
+router.get('/reviews/scheduled', async (req, res) => {
+  try {
+    const userId = req.user?.id || req.query.user_id
+    if (!userId) return res.status(400).json({ ok: false, error: 'user_id required' })
+    const items = await tutorService.getScheduledReviews(userId)
+    res.json({ ok: true, data: items })
+  } catch (err) {
+    console.error('GET /tutor/reviews/scheduled', err)
+    res.status(500).json({ ok: false, error: 'failed to fetch scheduled reviews' })
+  }
+})
+
+// Dev-only seeder to create a sample roadmap with chapters and quizzes
+router.post('/seed-sample', async (req, res) => {
+  try {
+    // Very small dev-only seeder
+    const sample = {
+      title: 'Sample Roadmap: Intro to AI',
+      description: 'A short sample roadmap to test the tutor UI',
+      chapters: []
+    }
+    const rd = await tutorService.createRoadmap({ title: sample.title, description: sample.description })
+    const ch1 = await tutorService.createChapter({ title: 'Chapter 1: Basics', content: '<p>Intro content</p>', position: 1 })
+    const quiz1 = await tutorService.createQuiz({ title: 'Quiz 1', questions: [{ question: 'What is AI?', choices: ['Tool', 'Science', 'Concept'], correctIndex: 2, points: 1 }] })
+    ch1.quizzes = [quiz1._id]
+    await ch1.save()
+    rd.chapters = [ch1._id]
+    await rd.save()
+    res.json({ ok: true, data: { roadmap: rd, chapter: ch1, quiz: quiz1 } })
+  } catch (err) {
+    console.error('POST /tutor/seed-sample', err)
+    res.status(500).json({ ok: false, error: 'seeding failed' })
+  }
+})
+
 // Create roadmap
 router.post('/roadmaps', async (req, res) => {
   try {

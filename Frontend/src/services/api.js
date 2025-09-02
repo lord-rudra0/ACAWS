@@ -408,6 +408,16 @@ export const tutorAPI = {
   }
 }
 
+// Hydration helper to fetch composite user state
+tutorAPI.getUserState = async (userId, roadmapId = null) => {
+  try {
+    const response = await expressAPI.get('/api/tutor/user-state', { params: { user_id: userId, roadmap_id: roadmapId } })
+    return response.data
+  } catch (err) {
+    throw new Error(err.message || 'Failed to fetch user state')
+  }
+}
+
 export const wellnessAPI = {
   recordEntry: async (entryData) => {
     try {

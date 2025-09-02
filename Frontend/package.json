@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build",
+    "test": "vitest",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"
   },
@@ -43,6 +46,12 @@
     "eslint-plugin-react-refresh": "0.4.5",
     "postcss": "8.4.32",
     "tailwindcss": "3.3.6",
-    "vite": "5.0.8"
+  "vite": "5.0.8",
+  "vitest": "^0.34.0",
+  "@testing-library/react": "^14.0.0",
+  "@testing-library/jest-dom": "^6.0.0",
+  "@storybook/react": "^7.0.0",
+  "@storybook/addon-essentials": "^7.0.0",
+  "@storybook/testing-library": "^0.1.0"
   }
 }
