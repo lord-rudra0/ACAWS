@@ -29,6 +29,17 @@ import PredictiveAnalytics from '../components/PredictiveAnalytics'
 import useAIFeatures from '../hooks/useAIFeatures'
 import { useAuth } from '../contexts/AuthContext'
 import geminiService from '../services/geminiService'
+import { learningAPI, wellnessAPI, analyticsAPI } from '../services/api'
+import { userAPI } from '../services/api'
+
+// Simple SVG avatar generator (returns data URL)
+const generateAvatarDataUrl = (text = '', size = 64) => {
+  const initials = (text || '').split(' ').slice(0,2).map(s => s[0] || '').join('').toUpperCase() || 'U'
+  const hue = (Array.from((text || '')).reduce((s,c) => s + c.charCodeAt(0), 0) % 360)
+  const bg = `hsl(${hue} 60% 60%)`
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}'><rect width='100%' height='100%' fill='${bg}' rx='8' ry='8'/><text x='50%' y='55%' font-size='28' font-family='Inter, Roboto, sans-serif' fill='white' text-anchor='middle' dominant-baseline='middle'>${initials}</text></svg>`
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
+}
 
 const EnhancedLearning = () => {
   const { user } = useAuth()
@@ -82,11 +93,57 @@ const EnhancedLearning = () => {
   })
 
   const [modules, setModules] = useState([])
+  const [moduleQuery, setModuleQuery] = useState('')
   const [newModuleTitle, setNewModuleTitle] = useState('')
   const [newModuleDifficulty, setNewModuleDifficulty] = useState('beginner')
   const [newModuleDuration, setNewModuleDuration] = useState('60 min')
 
+  const [autoSuggestEnabled, setAutoSuggestEnabled] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('el:autoSuggest')) ?? true } catch { return true }
+  })
+  const [sessionSavedAt, setSessionSavedAt] = useState(null)
+  const [predictionResult, setPredictionResult] = useState(null)
+  const [showPredictionExplanation, setShowPredictionExplanation] = useState(false)
+  const [lastSavedModuleId, setLastSavedModuleId] = useState(null)
+
   useEffect(() => {
+    // Load persisted modules from backend on mount
+    const loadModules = async () => {
+      try {
+        const resp = await learningAPI.getModules()
+        if (resp && resp.modules) setModules(resp.modules)
+      } catch (err) {
+        console.error('Could not load modules:', err)
+      }
+    }
+
+    loadModules()
+
+    // Load persisted wellness summary for correlation/alerts
+    const loadWellness = async () => {
+      try {
+        const ws = await wellnessAPI.getDailySummary()
+        if (ws) setPersistedWellness(ws.summary ?? ws)
+      } catch (err) {
+        console.error('Could not load persisted wellness summary:', err)
+      }
+    }
+    loadWellness()
+
+    // load user preferences (best-effort)
+    const loadUserSettings = async () => {
+      try {
+        const settings = await userAPI.getSettings()
+        if (settings && typeof settings.autoSuggestEnabled === 'boolean') {
+          setAutoSuggestEnabled(settings.autoSuggestEnabled)
+          localStorage.setItem('el:autoSuggest', JSON.stringify(settings.autoSuggestEnabled))
+        }
+      } catch (err) {
+        // ignore - user settings route may not exist for quick dev environments
+      }
+    }
+    loadUserSettings()
+
     if (isSessionActive) {
       intervalRef.current = setInterval(() => {
         setSessionTime(prev => prev + 1)
@@ -98,6 +155,22 @@ const EnhancedLearning = () => {
 
     return () => clearInterval(intervalRef.current)
   }, [isSessionActive])
+
+  // Persist autoSuggestEnabled preference whenever it changes (best-effort to backend)
+  useEffect(() => {
+    try {
+      localStorage.setItem('el:autoSuggest', JSON.stringify(autoSuggestEnabled))
+    } catch (e) { }
+
+    const savePref = async () => {
+      try {
+        await userAPI.saveSettings({ autoSuggestEnabled })
+      } catch (err) {
+        // non-fatal: backend may not expose settings endpoint
+      }
+    }
+    savePref()
+  }, [autoSuggestEnabled])
   
   useEffect(() => {
     // Update AI context when state changes
@@ -108,6 +181,22 @@ const EnhancedLearning = () => {
       userProfile: user
     })
   }, [cognitiveState, sessionAnalytics, currentModule, user, updateContext])
+
+  // Auto-suggest when confusion spikes above threshold (cooldown applied)
+  useEffect(() => {
+    const threshold = 60
+    const cooldownMs = 2 * 60 * 1000 // 2 minutes
+    const now = Date.now()
+    const confusion = cognitiveState?.confusion || 0
+    if (confusion >= threshold && (now - lastAutoSuggestAt.current) > cooldownMs) {
+      lastAutoSuggestAt.current = now
+      const topic = currentModule?.topics?.[0] || currentModule?.title || null
+      if (topic) {
+        generateTopicExplanation(topic)
+        if (window.toast) window.toast.info('AI Tutor suggested an explanation for possible confusion')
+      }
+    }
+  }, [cognitiveState?.confusion])
 
   const updateSessionAnalytics = () => {
     setSessionAnalytics(prev => ({
@@ -159,8 +248,9 @@ const EnhancedLearning = () => {
       })
       
       // Predict learning outcome for this module
-      const prediction = await predictLearningOutcome(module)
-      console.log('Learning outcome prediction:', prediction)
+  const prediction = await predictLearningOutcome(module)
+  console.log('Learning outcome prediction:', prediction)
+  setPredictionResult(prediction)
       
       // Optimize learning experience
       const optimization = await optimizeLearningExperience({
@@ -178,6 +268,90 @@ const EnhancedLearning = () => {
       if (window.toast) {
         window.toast.warning('Session started - some AI features may be limited')
       }
+    }
+  }
+
+  // Quick Action handlers
+  const [quickActionLoading, setQuickActionLoading] = useState(false)
+  const [persistedWellness, setPersistedWellness] = useState(null)
+  const lastAutoSuggestAt = useRef(0)
+
+  const handleQuickMicroQuiz = async () => {
+    if (!currentModule) {
+      if (window.toast) window.toast.info('Select a module first')
+      return
+    }
+    setQuickActionLoading(true)
+    try {
+      const quiz = await generatePersonalizedQuiz(currentModule.title, { difficulty: currentModule.difficulty })
+      handleAITutorQuizGenerated(quiz)
+      if (window.toast) window.toast.success('Micro-quiz generated')
+    } catch (err) {
+      console.error('Micro-quiz failed:', err)
+      if (window.toast) window.toast.warning('Could not generate micro-quiz')
+    } finally {
+      setQuickActionLoading(false)
+    }
+  }
+
+  const handleLowerDifficulty = async () => {
+    if (!currentModule) {
+      if (window.toast) window.toast.info('Select a module first')
+      return
+    }
+    setQuickActionLoading(true)
+    try {
+      const adaptation = await optimizeLearningExperience({
+        module: currentModule,
+        cognitiveState,
+        userProfile: user,
+        intent: 'lower_difficulty'
+      })
+      handleContentAdaptation(adaptation?.content || {}, adaptation?.adaptations || {})
+      if (window.toast) window.toast.success('Lowered difficulty for current module')
+    } catch (err) {
+      console.error('Lower difficulty failed:', err)
+      if (window.toast) window.toast.warning('Could not adjust difficulty')
+    } finally {
+      setQuickActionLoading(false)
+    }
+  }
+
+  const handleShortBreathingBreak = async () => {
+    // Pause session and schedule a 2-minute break
+    const wasActive = isSessionActive
+    if (wasActive) pauseSession()
+    if (window.toast) window.toast.info('Starting 2-minute breathing break')
+
+    // Persist break activity (best-effort)
+    try {
+      await wellnessAPI.recordBreak({ type: 'breathing', duration_seconds: 120, module_id: currentModule?.id || null })
+    } catch (err) {
+      // non-fatal
+      console.error('Could not record break:', err)
+    }
+
+    setTimeout(() => {
+      if (wasActive) setIsSessionActive(true)
+      if (window.toast) window.toast.success('Break complete — resuming session')
+    }, 120000)
+  }
+
+  const handleRegenerateContent = async () => {
+    if (!currentModule) {
+      if (window.toast) window.toast.info('Select a module first')
+      return
+    }
+    setQuickActionLoading(true)
+    try {
+      const content = await generateIntelligentContent(currentModule.title, { difficulty: currentModule.difficulty, userProfile: user, cognitiveState })
+      handleLearningPathGenerated(content)
+      if (window.toast) window.toast.success('Content regenerated')
+    } catch (err) {
+      console.error('Regenerate content failed:', err)
+      if (window.toast) window.toast.warning('Could not regenerate content')
+    } finally {
+      setQuickActionLoading(false)
     }
   }
 
@@ -217,6 +391,29 @@ const EnhancedLearning = () => {
       aiInteractions: prev.aiInteractions + 1
     }))
   }
+
+  // record prediction into session history for later review
+  useEffect(() => {
+    if (predictionResult) {
+      setSessionAnalytics(prev => ({
+        ...prev,
+        predictionHistory: [...(prev.predictionHistory || []), {
+          id: Date.now(),
+          prediction: predictionResult,
+          timestamp: new Date()
+        }]
+      }))
+      // Best-effort persist prediction to backend
+      (async () => {
+        try {
+          await learningAPI.savePrediction({ module_id: currentModule?.id, prediction: predictionResult })
+        } catch (err) {
+          // non-fatal
+          console.debug('Could not persist prediction:', err)
+        }
+      })()
+    }
+  }, [predictionResult])
 
   const handleLearningPathGenerated = (path) => {
     setLearningPaths(prev => [...prev, {
@@ -266,6 +463,18 @@ const EnhancedLearning = () => {
     try {
       const sessionSummary = await generateSessionSummary()
       
+      // Persist the session summary to backend (best-effort)
+      if (sessionSummary) {
+        await persistSessionSummary(sessionSummary)
+      } else {
+        // still try to persist minimal summary
+        await persistSessionSummary({
+          completion_percentage: currentModule ? 100 : 0,
+          initial_cognitive_state: {},
+          final_cognitive_state: cognitiveState
+        })
+      }
+
       if (window.toast) {
         window.toast.success('Session completed! AI summary generated.')
       }
@@ -282,6 +491,53 @@ const EnhancedLearning = () => {
     
     setCurrentModule(null)
     setSessionTime(0)
+  }
+
+  // Persist session summary to backend
+  const persistSessionSummary = async (summary) => {
+    try {
+      const payload = {
+        module_id: currentModule?.id,
+        session_type: 'study',
+        summary: {
+          ...summary,
+          started_at: summary?.started_at || new Date().toISOString(),
+          ended_at: new Date().toISOString()
+        },
+        cognitiveHistory: sessionAnalytics.cognitiveHistory,
+        adaptations: sessionAnalytics.adaptationHistory,
+        metrics: {
+          attention_score: Math.round(learningMetrics.averageScore),
+          wellness_score: null
+        },
+        duration: sessionTime
+      }
+
+      const resp = await learningAPI.saveSessionSummary(payload)
+      if (resp && resp.session) {
+        if (window.toast) window.toast.success('Session saved to server')
+        const now = new Date()
+        setSessionSavedAt(now)
+        // Record which module's session was saved and clear after a short duration
+        try {
+          const mid = currentModule?.id || null
+          setLastSavedModuleId(mid)
+          setTimeout(() => setLastSavedModuleId(null), 6000)
+        } catch (e) {}
+        // small visual flash (floating toast) retained for accessibility
+        if (window.toast) window.toast.info(`Session saved • ${now.toLocaleTimeString()}`)
+        // Refresh analytics dashboard to include this session in aggregated views
+        try {
+          await analyticsAPI.getDashboard()
+        } catch (e) {
+          // non-fatal
+          console.debug('analytics refresh failed:', e)
+        }
+      }
+    } catch (err) {
+      console.error('Could not persist session summary:', err)
+      if (window.toast) window.toast.warning('Session summary could not be saved')
+    }
   }
 
   const generateSessionSummary = async () => {
@@ -322,6 +578,30 @@ const EnhancedLearning = () => {
     } catch (error) {
       console.error('Topic explanation failed:', error)
       if (window.toast) window.toast.warning('Could not generate explanation right now')
+    }
+  }
+
+  // Correlation helpers: detect combined low wellness + low attention risk
+  const getPersistedWellnessScore = () => {
+    if (!persistedWellness) return null
+    return persistedWellness.wellness_score ?? persistedWellness.wellnessScore ?? null
+  }
+
+  const handleShowCorrelationRecommendations = async () => {
+    try {
+      const resp = await optimizeLearningExperience({
+        module: currentModule,
+        cognitiveState,
+        userProfile: user,
+        intent: 'recommend_relief_or_review'
+      })
+      if (resp) {
+        setAiInsights(prev => [...prev.slice(-9), { message: resp.message || 'Recommendations generated', details: resp }])
+        if (window.toast) window.toast.success('Recommendations generated')
+      }
+    } catch (err) {
+      console.error('Correlation recommendations failed:', err)
+      if (window.toast) window.toast.warning('Could not generate recommendations')
     }
   }
 
@@ -370,9 +650,43 @@ const EnhancedLearning = () => {
                   AI Score: {Math.round(learningMetrics.averageScore)} • {aiState.activeFeatures.size} features
                 </span>
               </div>
+              {/* Wellness badge */}
+              <div className="flex items-center space-x-2 bg-white dark:bg-gray-800 px-3 py-2 rounded-lg shadow">
+                <div className="flex flex-col items-end">
+                  <span className="text-xs text-gray-500 dark:text-gray-400">Wellness</span>
+                  <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                    {getPersistedWellnessScore() !== null ? `${Math.round(getPersistedWellnessScore())}%` : '—'}
+                  </span>
+                </div>
+                <div className="ml-2 w-9 h-9 rounded-full bg-gradient-to-br from-green-400 to-blue-500 flex items-center justify-center text-white">
+                  <Users className="w-4 h-4" />
+                </div>
+              </div>
+              {/* header area - saved badge moved next to module Start button */}
             </div>
           </div>
         </motion.div>
+        {/* Quick Actions */}
+        <div className="mb-6">
+          <div className="flex items-center gap-3">
+            <button onClick={handleQuickMicroQuiz} disabled={quickActionLoading} className="btn-ghost flex items-center space-x-2">
+              <Target className="w-4 h-4" />
+              <span>Micro-quiz</span>
+            </button>
+            <button onClick={handleLowerDifficulty} disabled={quickActionLoading} className="btn-ghost flex items-center space-x-2">
+              <Settings className="w-4 h-4" />
+              <span>Lower difficulty</span>
+            </button>
+            <button onClick={handleShortBreathingBreak} className="btn-ghost flex items-center space-x-2">
+              <Timer className="w-4 h-4" />
+              <span>2-min break</span>
+            </button>
+            <button onClick={handleRegenerateContent} disabled={quickActionLoading} className="btn-ghost flex items-center space-x-2">
+              {quickActionLoading ? <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 11-8 8z"/></svg> : <RotateCcw className="w-4 h-4" />}
+              <span>Regenerate</span>
+            </button>
+          </div>
+        </div>
 
         {/* Enhanced Learning Metrics */}
         <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-8">
@@ -474,26 +788,48 @@ const EnhancedLearning = () => {
                   />
                   <button
                     className="btn-primary"
-                    onClick={() => {
+                    onClick={async () => {
                       if (!newModuleTitle.trim()) return
-                      const mod = {
-                        id: Date.now(),
+                      const modulePayload = {
                         title: newModuleTitle.trim(),
                         description: 'User added module',
+                        category: 'user',
                         difficulty: newModuleDifficulty,
-                        duration: newModuleDuration,
-                        progress: 0,
-                        topics: [],
-                        aiFeatures: [],
-                        hasAITutor: true,
-                        hasAdaptiveContent: true,
-                        estimatedScore: Math.round(learningMetrics.averageScore)
+                        duration: parseInt(newModuleDuration) || 60,
+                        topics: []
                       }
-                      setModules(prev => [...prev, mod])
-                      setNewModuleTitle('')
+                      try {
+                        const resp = await learningAPI.createModule(modulePayload)
+                        if (resp && resp.module) {
+                          setModules(prev => [...prev, resp.module])
+                          setNewModuleTitle('')
+                          if (window.toast) window.toast.success('Module saved')
+                        } else {
+                          const mod = { id: Date.now(), title: newModuleTitle.trim(), description: 'User added module', difficulty: newModuleDifficulty, duration: newModuleDuration }
+                          setModules(prev => [...prev, mod])
+                          setNewModuleTitle('')
+                        }
+                      } catch (err) {
+                        console.error('Create module failed:', err)
+                        const mod = { id: Date.now(), title: newModuleTitle.trim(), description: 'User added module', difficulty: newModuleDifficulty, duration: newModuleDuration }
+                        setModules(prev => [...prev, mod])
+                        setNewModuleTitle('')
+                        if (window.toast) window.toast.warning('Could not persist module, saved locally')
+                      }
                     }}
                   >Add</button>
                 </div>
+              </div>
+
+              {/* Module search */}
+              <div className="mb-4">
+                <input
+                  type="search"
+                  placeholder="Search modules..."
+                  value={moduleQuery}
+                  onChange={e => setModuleQuery(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border dark:bg-gray-900 dark:border-gray-700"
+                />
               </div>
 
               <div className="space-y-4">
@@ -502,7 +838,7 @@ const EnhancedLearning = () => {
                     No modules yet. Add a module to start a recorded session.
                   </div>
                 )}
-                {modules.map((module) => (
+                {modules.filter(m => m.title.toLowerCase().includes(moduleQuery.toLowerCase())).map((module) => (
                   <div
                     key={module.id}
                     className={`p-6 rounded-xl border-2 transition-all duration-300 ${
@@ -514,9 +850,20 @@ const EnhancedLearning = () => {
                     <div className="flex items-start justify-between mb-4">
                       <div className="flex-1">
                         <div className="flex items-center space-x-3 mb-2">
-                          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                            {module.title}
-                          </h3>
+                          <div className="w-12 h-12 rounded-lg bg-gray-100 dark:bg-gray-700 flex items-center justify-center overflow-hidden">
+                            {/* Thumbnail or initials */}
+                            {module.thumbnail ? (
+                              <img src={module.thumbnail} alt={module.title} className="w-full h-full object-cover" />
+                            ) : (
+                              <img src={generateAvatarDataUrl(module.title, 64)} alt={module.title} className="w-full h-full object-cover" />
+                            )}
+                          </div>
+                          <div>
+                            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                              {module.title}
+                            </h3>
+                            <div className="text-xs text-gray-500 dark:text-gray-400">{module.recommendationCopy || `Recommended for you — matches your learning interests`}</div>
+                          </div>
                           {module.hasAITutor && (
                             <div className="bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-full text-xs font-medium">
                               AI Tutor
@@ -560,13 +907,21 @@ const EnhancedLearning = () => {
                         )}
                       </div>
                       
-                      <button
-                        onClick={() => startEnhancedLearningSession(module)}
-                        className="btn-primary flex items-center space-x-2 ml-4"
-                      >
-                        <Play className="w-4 h-4" />
-                        <span>Start Enhanced</span>
-                      </button>
+                      <div className="ml-4 flex items-center space-x-3">
+                        <button
+                          onClick={() => startEnhancedLearningSession(module)}
+                          className="btn-primary flex items-center space-x-2"
+                        >
+                          <Play className="w-4 h-4" />
+                          <span>Start Enhanced</span>
+                        </button>
+                        {lastSavedModuleId === module.id && (
+                          <div className="px-2 py-1 rounded-full bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-700 dark:text-green-300 text-xs flex items-center space-x-1 animate-bounce">
+                            <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20 6L9 17l-5-5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                            <span>Saved</span>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     {/* Enhanced Progress Bar */}
@@ -682,6 +1037,39 @@ const EnhancedLearning = () => {
                     </div>
                   </div>
                 )}
+                {/* Prediction Result & Session Saved Indicator */}
+                <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg">
+                  {predictionResult ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm text-gray-600 dark:text-gray-400">Predicted Outcome</div>
+                          <div className="text-lg font-semibold text-gray-900 dark:text-white">{predictionResult.label || 'Result'}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm text-gray-500">Confidence</div>
+                          <div className="text-lg font-mono text-primary-500">{Math.round((predictionResult.confidence || 0) * 100)}%</div>
+                        </div>
+                      </div>
+                      <div>
+                        <button onClick={() => setShowPredictionExplanation(s => !s)} className="text-sm text-primary-600 hover:underline">
+                          {showPredictionExplanation ? 'Hide explanation' : 'Show explanation'}
+                        </button>
+                        {showPredictionExplanation && (
+                          <div className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+                            {predictionResult.explanation || predictionResult.details || 'No explanation available.'}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-gray-500">No prediction available for this module yet.</div>
+                  )}
+
+                  {sessionSavedAt && (
+                    <div className="mt-3 text-xs text-gray-600 dark:text-gray-400">Last saved: {new Date(sessionSavedAt).toLocaleString()}</div>
+                  )}
+                </div>
               </motion.div>
             )}
 
@@ -691,6 +1079,27 @@ const EnhancedLearning = () => {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
               >
+                {/* Correlation alert: low persisted wellness + low attention */}
+                {(() => {
+                  const pws = getPersistedWellnessScore()
+                  const attention = Math.round(cognitiveState.attention || 0)
+                  if (pws !== null && pws < 50 && attention < 50) {
+                    return (
+                      <div className="mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-sm font-semibold text-red-700 dark:text-red-300">Wellness + Learning Risk</div>
+                            <div className="text-xs text-red-600 dark:text-red-400">Persisted wellness is low ({Math.round(pws)}) and attention appears reduced ({attention}%) — consider a short break or review.</div>
+                          </div>
+                          <div>
+                            <button onClick={handleShowCorrelationRecommendations} className="btn-primary">Get recommendations</button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  }
+                  return null
+                })()}
                 <PredictiveAnalytics
                   userProfile={user}
                   learningHistory={sessionAnalytics}
@@ -699,6 +1108,7 @@ const EnhancedLearning = () => {
                     averageStress: Math.round((cognitiveState.fatigue + cognitiveState.cognitiveLoad) / 2 / 10) || 0,
                     averageMood: Math.round((cognitiveState.emotionalStability + cognitiveState.engagement) / 2 / 10) || 0
                   }}
+                  persistedWellness={persistedWellness}
                   onPredictionUpdate={(predictions) => console.log('Predictions updated:', predictions)}
                   onRiskAlert={(risks) => {
                     if (window.toast) {
@@ -910,17 +1320,6 @@ const EnhancedLearning = () => {
     </div>
   </div>
   )
-}
-
-// Helper function
-const generateTopicExplanation = async (topic) => {
-  try {
-    if (window.toast) {
-      window.toast.info(`Generating AI explanation for: ${topic}`)
-    }
-  } catch (error) {
-    console.error('Topic explanation failed:', error)
-  }
 }
 
 export default EnhancedLearning

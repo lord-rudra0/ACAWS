@@ -270,6 +270,16 @@ export const learningAPI = {
     }
   },
 
+  // Persist prediction history for analytics
+  savePrediction: async (predictionData) => {
+    try {
+      const response = await expressAPI.post('/api/learning/predictions', predictionData)
+      return response.data
+    } catch (error) {
+      throw new Error(error.message || 'Failed to save prediction')
+    }
+  },
+
   // Create module (persisted)
   createModule: async (moduleData) => {
     try {

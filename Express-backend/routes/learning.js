@@ -261,6 +261,31 @@ router.post('/sessions/save', asyncHandler(async (req, res) => {
   res.status(201).json({ success: true, session: doc.toJSON() })
 }))
 
+// Persist prediction history for analytics
+router.post('/predictions', asyncHandler(async (req, res) => {
+  const userId = req.user?.id
+  const { module_id, prediction } = req.body
+
+  if (!module_id || !prediction) {
+    return res.status(400).json({ success: false, message: 'module_id and prediction required' })
+  }
+
+  // find latest session for user and module (within last day) to attach prediction
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000)
+  let sessionDoc = await LearningSession.findOne({ user_id: userId, module_id, started_at: { $gte: since } }).sort({ started_at: -1 })
+
+  if (!sessionDoc) {
+    // create a minimal session doc to hold prediction history
+    sessionDoc = await LearningSession.create({ user_id: userId, module_id, session_type: 'study', status: 'completed', started_at: new Date(), ended_at: new Date(), last_updated: new Date() })
+  }
+
+  sessionDoc.prediction_history = sessionDoc.prediction_history || []
+  sessionDoc.prediction_history.push({ ...prediction, timestamp: new Date() })
+  await sessionDoc.save()
+
+  res.json({ success: true, prediction: prediction })
+}))
+
 // Get learning recommendations
 router.get('/recommendations', asyncHandler(async (req, res) => {
   const userId = req.user.id

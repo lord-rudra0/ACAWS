@@ -10,6 +10,7 @@ const LearningSessionSchema = new mongoose.Schema(
     current_cognitive_state: { type: mongoose.Schema.Types.Mixed, default: {} },
     content_progress: { type: Number, default: 0 },
     interactions: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  prediction_history: { type: [mongoose.Schema.Types.Mixed], default: [] },
     adaptations_applied: { type: mongoose.Schema.Types.Mixed, default: {} },
     attention_score: { type: Number },
     wellness_score: { type: Number },

@@ -179,6 +179,29 @@ router.put('/preferences', asyncHandler(async (req, res) => {
   })
 }))
 
+// Get current user's settings (preferences)
+router.get('/me/settings', asyncHandler(async (req, res) => {
+  const userId = req.user.id
+  const userDoc = await User.findById(userId).select('preferences')
+  if (!userDoc) return res.status(404).json({ success: false, message: 'User not found' })
+
+  res.json({ success: true, settings: userDoc.preferences || {} })
+}))
+
+// Save current user's settings (merge into preferences)
+router.post('/me/settings', asyncHandler(async (req, res) => {
+  const userId = req.user.id
+  const newSettings = req.body || {}
+
+  const userDoc = await User.findById(userId)
+  if (!userDoc) return res.status(404).json({ success: false, message: 'User not found' })
+
+  userDoc.preferences = Object.assign({}, userDoc.preferences || {}, newSettings)
+  await userDoc.save()
+
+  res.json({ success: true, settings: userDoc.preferences })
+}))
+
 // Get user learning statistics
 router.get('/stats', asyncHandler(async (req, res) => {
   const userId = req.user.id
