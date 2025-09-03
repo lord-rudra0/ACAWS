@@ -72,6 +72,8 @@ const Learning = () => {
   const [teachingModalOpen, setTeachingModalOpen] = useState(false)
   const [teachingContent, setTeachingContent] = useState(null)
   const [teachingLoading, setTeachingLoading] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [generateErrorRaw, setGenerateErrorRaw] = useState(null)
   
   // State for performance tracking
   const [performanceHistory, setPerformanceHistory] = useState([])
@@ -413,7 +415,7 @@ const Learning = () => {
             </div>
 
             {/* Session Controls */}
-            <div className="flex items-end space-x-3">
+              <div className="flex items-end space-x-3">
               {!isSessionActive ? (
                 <button
                   onClick={startSession}
@@ -442,10 +444,54 @@ const Learning = () => {
                 </>
               )}
               <button onClick={async () => {
+                setGenerateErrorRaw(null)
+                setGenerating(true)
                 try {
-                  const gen = await tutorAPI.generateRoadmap({ subject: 'Foundations of AI', difficulty: 'beginner', chapters: 4 })
+                  // Build payload: prefer selectedModule.ai_meta -> selectedRoadmap.meta.ai_meta -> saved template -> last payload -> fallback
+                  const lastPayloadKey = 'acaws.lastGeneratePayload'
+                  const buildFromModule = selectedModule && selectedModule.ai_meta ? { ...selectedModule.ai_meta } : null
+                  const buildFromRoadmap = selectedRoadmap && selectedRoadmap.meta && selectedRoadmap.meta.ai_meta ? { ...selectedRoadmap.meta.ai_meta } : null
+                  let template = null
+                  try {
+                    const t = JSON.parse(localStorage.getItem('acaws.aiTemplates') || '[]')
+                    if (Array.isArray(t) && t.length > 0) template = t[0]
+                  } catch (e) { template = null }
+                  let last = null
+                  try { last = JSON.parse(localStorage.getItem(lastPayloadKey) || 'null') } catch (e) { last = null }
+
+                  const payload = {}
+                  // subject
+                  payload.subject = (buildFromModule && buildFromModule.subject) || (buildFromRoadmap && buildFromRoadmap.subject) || (template && template.subject) || (last && last.subject) || (selectedRoadmap && selectedRoadmap.title) || 'Introduction to AI'
+                  // difficulty
+                  payload.difficulty = (buildFromModule && buildFromModule.difficulty) || (buildFromRoadmap && buildFromRoadmap.difficulty) || (template && template.difficulty) || (last && last.difficulty) || 'beginner'
+                  // chapters
+                  payload.chapters = Number((buildFromModule && buildFromModule.chapters) || (buildFromRoadmap && buildFromRoadmap.chapters) || (template && template.chapters) || (last && last.chapters) || 4)
+
+                  // persist last payload for convenience
+                  try { localStorage.setItem(lastPayloadKey, JSON.stringify(payload)) } catch (e) {}
+
+                  // persist selected roadmap context if present and include its id in payload
+                  try {
+                    if (selectedRoadmap) {
+                      localStorage.setItem('acaws.lastRoadmap', JSON.stringify(selectedRoadmap))
+                      payload.roadmap_id = selectedRoadmap._id || selectedRoadmap.id || null
+                    }
+                  } catch (e) {}
+
+                  const gen = await tutorAPI.generateRoadmap(payload)
                   if (gen && gen.data && gen.data.roadmap) {
-                    // hydrate using user-state
+                    const newRd = gen.data.roadmap
+                    // Ensure generated roadmap is visible immediately (works for anonymous and logged-in users)
+                    setSelectedRoadmap(newRd)
+                    try { localStorage.setItem('acaws.lastRoadmap', JSON.stringify(newRd)) } catch (e) {}
+                    // set the first chapter as selected if available
+                    const firstCh = (newRd.chapters && newRd.chapters[0]) || null
+                    setSelectedChapter(firstCh)
+                    setActiveQuiz((firstCh && firstCh.quizzes && firstCh.quizzes[0]) || null)
+                    // Refresh list so roadmap picker shows the new item
+                    try { loadRoadmaps() } catch (e) {}
+
+                    // If user is logged in, hydrate composite user state as well
                     if (userId) {
                       const st = await tutorAPI.getUserState(userId)
                       if (st && st.data) {
@@ -456,9 +502,26 @@ const Learning = () => {
                         setLearningProgress(s.progress?.percent || 0)
                       }
                     }
+                  } else if (gen && gen.raw) {
+                    // Server returned raw AI excerpt on parse failure
+                    setGenerateErrorRaw(gen.raw)
+                  } else if (gen && gen.data && gen.data.raw) {
+                    setGenerateErrorRaw(gen.data.raw)
                   }
-                } catch (e) { console.error('Generate failed', e); alert('AI generation failed') }
-              }} className="btn-secondary ml-2">Generate AI Roadmap</button>
+                } catch (e) { 
+                  console.error('Generate failed', e)
+                  // If server returned JSON with raw excerpt, extract it here
+                  if (e && e.response && e.response.data && e.response.data.raw) setGenerateErrorRaw(e.response.data.raw)
+                } finally {
+                  setGenerating(false)
+                }
+              }} className="btn-secondary ml-2">{generating ? 'Generating...' : 'Generate AI Roadmap'}</button>
+              {generateErrorRaw && (
+                <div className="ml-3 text-xs text-red-600">
+                  <div className="font-medium">AI parse failed — raw excerpt:</div>
+                  <pre className="max-h-40 overflow-auto text-xs bg-gray-100 dark:bg-gray-900 p-2 rounded mt-1">{generateErrorRaw}</pre>
+                </div>
+              )}
             </div>
 
             {/* Progress Display */}

@@ -12,6 +12,9 @@ export const useWebSocket = (url, options = {}) => {
   const heartbeatIntervalRef = useRef(null)
   const isConnectingRef = useRef(false)
   const lastConnectTimeRef = useRef(0)
+  // suppress noisy repeated 'connect_rate_limited' logs: track last log time and suppressed count
+  // This prevents console flooding when connect attempts are rapidly retried.
+  const rateLimitSuppressRef = useRef({ lastLogged: 0, suppressed: 0 })
   const maxReconnectAttempts = options.maxReconnectAttempts || 5
   const reconnectInterval = options.reconnectInterval || 3000
   const heartbeatInterval = options.heartbeatInterval || 30000
@@ -56,7 +59,17 @@ export const useWebSocket = (url, options = {}) => {
     // Prevent rapid repeated connect attempts
     const now = Date.now()
     if (now - lastConnectTimeRef.current < 500) {
-      logConnection('connect_rate_limited', { sinceLast: now - lastConnectTimeRef.current })
+      // increment suppressed counter and only emit a log at most once per interval
+      const interval = options.rateLimitLogInterval || 60000 // default 60s
+      rateLimitSuppressRef.current.suppressed = (rateLimitSuppressRef.current.suppressed || 0) + 1
+      if (now - rateLimitSuppressRef.current.lastLogged > interval) {
+        logConnection('connect_rate_limited', {
+          sinceLast: now - lastConnectTimeRef.current,
+          suppressed: rateLimitSuppressRef.current.suppressed
+        })
+        rateLimitSuppressRef.current.lastLogged = now
+        rateLimitSuppressRef.current.suppressed = 0
+      }
       return
     }
     lastConnectTimeRef.current = now

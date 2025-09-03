@@ -9,6 +9,7 @@ const LearningModuleSchema = new mongoose.Schema(
     duration: { type: Number, default: 0 }, // minutes
     topics: { type: [String], default: [] },
     prerequisites: { type: [String], default: [] },
+  ai_meta: { type: Object, default: {} },
     active: { type: Boolean, default: true }
   },
   { timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }

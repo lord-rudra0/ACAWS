@@ -39,14 +39,14 @@ router.post('/modules', [
     return res.status(400).json({ success: false, message: 'Validation failed', errors: errors.array() })
   }
 
-  const { title, description, category, difficulty, duration, topics = [], prerequisites = [] } = req.body
-  const doc = await LearningModule.create({ title, description, category, difficulty, duration, topics, prerequisites, created_at: new Date() })
+  const { title, description, category, difficulty, duration, topics = [], prerequisites = [], ai_meta = {} } = req.body
+  const doc = await LearningModule.create({ title, description, category, difficulty, duration, topics, prerequisites, ai_meta, created_at: new Date() })
   // Also create a lightweight TutorRoadmap so modules appear in AI/Tutor listings
   try {
     const roadmapPayload = {
       title: title,
       description: description || '',
-      meta: { linkedModuleId: doc._id, category, difficulty, duration }
+      meta: { linkedModuleId: doc._id, category, difficulty, duration, ai_meta }
     }
     const rd = await tutorService.createRoadmap(roadmapPayload)
     res.status(201).json({ success: true, module: doc.toJSON(), tutorRoadmap: rd })

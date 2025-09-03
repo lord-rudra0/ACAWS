@@ -55,11 +55,30 @@ const limiter = rateLimit({
 app.use(helmet())
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin || corsOriginsArr.includes(origin)) {
-      callback(null, true)
-    } else {
-      callback(new Error('Not allowed by CORS'))
-    }
+    // Helpful debug log for CORS issues during development
+    // (will show undefined for same-origin or curl without Origin)
+    try {
+      // Avoid verbose logging in production
+      if ((process.env.NODE_ENV || 'development') === 'development') {
+        console.log('CORS check, incoming origin:', origin)
+      }
+    } catch (e) {}
+
+    // Allow when no origin (server-to-server or same-origin requests)
+    if (!origin) return callback(null, true)
+
+    // Allow configured origins
+    if (corsOriginsArr.includes(origin)) return callback(null, true)
+
+    // Allow common local development origins (localhost, 127.0.0.1) and local network addresses
+    try {
+      const localhostPattern = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i
+      const localNetworkPattern = /^https?:\/\/(172\.16|172\.24|192\.168|10\.)\.[0-9.]+(:\d+)?$/i
+      if (localhostPattern.test(origin) || localNetworkPattern.test(origin)) return callback(null, true)
+    } catch (e) {}
+
+    // Not allowed
+    callback(new Error('Not allowed by CORS'))
   },
   credentials: true
 }))

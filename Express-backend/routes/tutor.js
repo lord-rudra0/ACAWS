@@ -1,6 +1,7 @@
 import express from 'express'
 import tutorService from '../services/tutorService.js'
 import { sendPrompt } from '../utils/geminiClient.js'
+import { parseRoadmapFromText } from '../utils/aiParsing.js'
 
 const router = express.Router()
 
@@ -107,14 +108,47 @@ router.post('/seed-sample', async (req, res) => {
 router.post('/generate', async (req, res) => {
   try {
     const { subject = 'Introduction to AI', difficulty = 'beginner', chapters = 5 } = req.body || {}
-    // Construct a prompt for the AI to produce a JSON roadmap with chapters and quizzes
-    const prompt = `Generate a learning roadmap for subject: "${subject}" with difficulty "${difficulty}" containing ${chapters} chapters. Output ONLY valid JSON with keys: title, description, chapters. Each chapter should be an object with keys: title, content (html), position, quizzes (array). Each quiz should have: title, questions (array of question objects). Each question: question, choices (array), correctIndex (number), points (number). Keep content concise.`
 
-    const out = await sendPrompt({ prompt })
-    const jsonMatch = out.text.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) return res.status(500).json({ ok: false, error: 'AI did not return JSON' })
-    let parsed
-    try { parsed = JSON.parse(jsonMatch[0]) } catch (e) { return res.status(500).json({ ok: false, error: 'Failed to parse AI JSON' }) }
+    // Improved prompt: be explicit about JSON and provide a strict schema example to encourage valid JSON output.
+    const prompt = `You are an assistant that outputs STRICTLY valid JSON. Produce a learning roadmap for the subject: "${subject}" with difficulty "${difficulty}" containing ${chapters} chapters. Respond with a single JSON object only. Schema example (use same keys): {\n  "title": "...",\n  "description": "...",\n  "chapters": [ { "title": "...", "content": "<p>...</p>", "position": 1, "quizzes": [ { "title": "...", "questions": [ { "question": "...", "choices": ["a","b","c"], "correctIndex": 0, "points": 1 } ] } ] } ]\n}\n
+- Use HTML for chapter.content.\n- Keep text concise (1-3 sentences per chapter).\n- DO NOT include any commentary, explanation, or markdown around the JSON.\n`
+
+    // Retry/backoff parameters
+    const maxAttempts = Number(process.env.GENERATE_RETRY_ATTEMPTS || 3)
+    const baseDelayMs = 500 // initial backoff
+
+    let attempt = 0
+    let parsed = null
+    let lastRaw = ''
+    while (attempt < maxAttempts && !parsed) {
+      attempt += 1
+      const out = await sendPrompt({ prompt })
+      const rawText = out?.text || ''
+      lastRaw = rawText
+      if ((process.env.NODE_ENV || 'development') === 'development') {
+        console.log(`AI /generate raw output (attempt ${attempt}):`, rawText.slice(0, 4000))
+      }
+
+      const { parsed: p, error } = parseRoadmapFromText(rawText)
+      if (p) {
+        parsed = p
+        break
+      }
+
+      // failed parse -> backoff then retry (with jitter)
+      if (attempt < maxAttempts) {
+        const jitter = Math.floor(Math.random() * 200)
+        const delay = baseDelayMs * Math.pow(2, attempt - 1) + jitter
+        if ((process.env.NODE_ENV || 'development') === 'development') {
+          console.log(`/generate parse failed (attempt ${attempt}):`, error, 'retrying in', delay, 'ms')
+        }
+        await new Promise(r => setTimeout(r, delay))
+      }
+    }
+
+    if (!parsed) {
+      return res.status(500).json({ ok: false, error: 'Failed to parse AI JSON after retries', raw: lastRaw.slice(0, 1000) })
+    }
 
     // Persist roadmap and nested docs
     const rd = await tutorService.createRoadmap({ title: parsed.title || subject, description: parsed.description || '' })
@@ -130,7 +164,9 @@ router.post('/generate', async (req, res) => {
       rd.chapters.push(chDoc._id)
     }
     await rd.save()
-    res.json({ ok: true, roadmap: rd })
+
+    // Return under `data.roadmap` to match frontend expectations (tutorAPI.generateRoadmap -> gen.data.roadmap)
+    res.json({ ok: true, data: { roadmap: rd } })
   } catch (err) {
     console.error('POST /tutor/generate failed', err)
     res.status(500).json({ ok: false, error: 'generation failed' })
@@ -187,14 +223,31 @@ router.post('/teach', async (req, res) => {
     const prompt = `You are an expert teacher. Teach the chapter titled "${chapter.title}" from roadmap "${roadmap.title}". Chapter content: ${chapter.content || chapter.summary || ''}. Adapt your explanation to the following user context: ${JSON.stringify(user_context)}. Provide: a concise explanation (3-5 sentences), three brief worked examples, two practice questions with answers, and suggested next steps. Output only JSON with keys: explanation, examples (array), practice_questions (array of {question, answer}), next_steps (array).`
 
     const out = await sendPrompt({ prompt, model: 'gemini-pro', systemInstruction: 'You are a helpful teacher.' })
-    // Try to extract JSON
-    const jsonMatch = out.text && out.text.match(/\{[\s\S]*\}/)
-    let parsed = null
-    if (jsonMatch) {
-      try { parsed = JSON.parse(jsonMatch[0]) } catch (e) { /* ignore parse error */ }
+    const rawText = out?.text || ''
+    if ((process.env.NODE_ENV || 'development') === 'development') {
+      console.log('AI /teach raw output:', rawText.slice(0, 4000))
     }
 
-    res.json({ ok: true, data: parsed || { raw: out.text } })
+    // Try to extract JSON with a tolerant extractor
+    const extractJson = (text) => {
+      if (!text) return null
+      const m = text.match(/\{[\s\S]*\}/)
+      if (m) return m[0]
+      const si = text.indexOf('{')
+      const ei = text.lastIndexOf('}')
+      if (si !== -1 && ei !== -1 && ei > si) return text.slice(si, ei + 1)
+      return null
+    }
+
+    let parsed = null
+    try {
+      const j = extractJson(rawText)
+      if (j) parsed = JSON.parse(j)
+    } catch (e) {
+      // ignore parse error, we'll return raw
+    }
+
+    res.json({ ok: true, data: parsed || { raw: rawText } })
   } catch (err) {
     console.error('POST /tutor/teach', err)
     res.status(500).json({ ok: false, error: 'teaching generation failed' })
