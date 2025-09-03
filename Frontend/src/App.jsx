@@ -15,6 +15,7 @@ const Login = lazy(() => import('./pages/Login'))
 const Register = lazy(() => import('./pages/Register'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const Learning = lazy(() => import('./pages/Learning'))
+const ChapterDetail = lazy(() => import('./pages/ChapterDetail'))
 const Wellness = lazy(() => import('./pages/Wellness'))
 const Community = lazy(() => import('./pages/Community'))
 const Analytics = lazy(() => import('./pages/Analytics'))
@@ -79,6 +80,10 @@ function App() {
                     <Route 
                       path="/learning" 
                       element={user ? <Learning /> : <Navigate to="/login" />} 
+                    />
+                    <Route
+                      path="/learning/roadmap/:roadmapId/chapter/:chapterId"
+                      element={user ? <ChapterDetail /> : <Navigate to="/login" />}
                     />
                     <Route 
                       path="/wellness" 

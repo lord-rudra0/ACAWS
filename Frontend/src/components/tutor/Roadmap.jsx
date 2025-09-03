@@ -1,13 +1,16 @@
-import React, { useState } from 'react'
+import React from 'react'
 import { motion } from 'framer-motion'
+import { useNavigate } from 'react-router-dom'
 
 const Roadmap = ({ roadmap, onSelectChapter, selectedChapterId }) => {
-  const [openId, setOpenId] = useState(null)
+  const navigate = useNavigate()
 
   const handleClick = (ch) => {
-    const id = ch._id || ch.id
-    setOpenId(prev => (prev === id ? null : id))
+    const roadmapId = roadmap._id || roadmap.id
+    const chapterId = ch._id || ch.id
     if (onSelectChapter) onSelectChapter(ch)
+    // navigate to chapter detail page
+    navigate(`/learning/roadmap/${roadmapId}/chapter/${chapterId}`)
   }
 
   return (
@@ -17,7 +20,6 @@ const Roadmap = ({ roadmap, onSelectChapter, selectedChapterId }) => {
       <div className="space-y-3">
         {(roadmap.chapters || []).map(ch => {
           const id = ch._id || ch.id
-          const isOpen = openId === id
           const isSelected = selectedChapterId === id
           return (
             <motion.div
@@ -33,20 +35,6 @@ const Roadmap = ({ roadmap, onSelectChapter, selectedChapterId }) => {
                 </div>
                 <div className="text-sm text-gray-500">{ch.position || '-'}</div>
               </div>
-
-              {isOpen && (
-                <div className="mt-3 text-xs text-gray-500 dark:text-gray-400">
-                  <div className="mb-2" dangerouslySetInnerHTML={{ __html: ch.content || '<p>No description</p>' }} />
-                  {Array.isArray(ch.resources) && ch.resources.length > 0 && (
-                    <div className="mt-2 text-xs text-gray-600 dark:text-gray-300">
-                      <strong>Resources:</strong>
-                      <ul className="list-disc pl-5 mt-1">
-                        {ch.resources.map((r, i) => <li key={i}>{r}</li>)}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              )}
             </motion.div>
           )
         })}

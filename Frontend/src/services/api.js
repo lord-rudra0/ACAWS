@@ -274,6 +274,24 @@ export const learningAPI = {
       throw new Error(error.message || 'Failed to load progress data')
     }
   },
+
+  // Aggregated stats used by the dashboard. If backend doesn't provide a dedicated
+  // /stats endpoint, fall back to progress and return a safe shape.
+  getStats: async () => {
+    try {
+      const response = await expressAPI.get('/api/learning/stats')
+      return response.data
+    } catch (err) {
+      // Fallback: try progress
+      try {
+        const p = await learningAPI.getProgress()
+        // map progress to a simple stats shape
+        return { data: { totalSessions: p.totalSessions || 0, averageScore: p.averageScore || 0, totalTime: p.totalTime || 0, modulesCompleted: p.modulesCompleted || 0 } }
+      } catch (e) {
+        return { data: { totalSessions: 0, averageScore: 0, totalTime: 0, modulesCompleted: 0 } }
+      }
+    }
+  },
   
   startSession: async (sessionData) => {
     try {
@@ -338,6 +356,11 @@ export const learningAPI = {
     } catch (error) {
       throw new Error(error.message || 'Failed to save session summary')
     }
+  },
+
+  // Backwards-compatible alias used by some pages
+  saveSession: async (summaryData) => {
+    return learningAPI.saveSessionSummary(summaryData)
   },
 
   // Persist prediction history for analytics

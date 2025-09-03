@@ -50,10 +50,23 @@ If you get any errors, check the folder-specific README:
   - `Python-backend/README.md`
 ```
 
-– Frontend
+sudo apt-get update
+sudo apt-get install -y build-essential python3
+
+# Set Python 3 as default for node-gyp
+npm config set python python3
+```
+
+### 3. Install Project Dependencies
 ```bash
-npm install
-npm run dev   # or: npm start
+# Navigate to project directory
+cd Frontend
+
+# Clean previous installations (if any)
+rm -rf node_modules package-lock.json
+
+# Install dependencies
+npm install --legacy-peer-deps
 ```
 ## Troubleshooting
 If you get any errors, check the folder-specific README:
