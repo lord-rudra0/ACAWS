@@ -1,85 +1,85 @@
-# DevByZero-Platform-9-
+# ACAWS - Local Development
 
-## Quick Setup
+This repository contains three main parts:
+- Express backend (Express-backend)
+- Python backend (Python-backend)
+- Frontend (Frontend)
 
-1) Clone
+This README adds concise Linux (Ubuntu/Debian) instructions to run the project locally for development.
+
+Prerequisites
+- Node.js (16+ recommended)
+- npm
+- Python 3.10+ and venv
+- MongoDB (local)
+- Docker (optional, recommended for running MongoDB)
+
+Quick-start (Linux)
+
+1) Install system packages
+
 ```bash
-git clone https://github.com/DevOps-Malayalam/DevByZero-Platform-9-
-cd DevByZero-Platform-9-
+sudo apt-get update && sudo apt-get install -y build-essential curl python3 python3-venv python3-pip git docker.io
 ```
 
-2) Environment files
-- Express backend: `Express-backend/.env`
-- Python backend: `Python-backend/.env`
-- Frontend: `Frontend/.env` (if used)
+2) Start MongoDB (choose one):
 
-Minimum vars to set:
-- `MONGODB_URI` (shared by Express and Python backends)
-- `JWT_SECRET` (same across services recommended)
+- Use system MongoDB service if installed
 
-3) Start order (priority)
-- Start MongoDB service first
-- Start backends (order doesn’t matter)
-  - Express backend
-  - Python backend
-- Start Frontend last
-
-## Commands
-
-From each folder:
-
-– Express-backend
 ```bash
+sudo systemctl start mongodb || sudo systemctl start mongod
+```
+
+- Or use Docker (recommended for isolated dev)
+
+```bash
+docker run -d -p 27017:27017 --name acaws-mongo mongo:6
+```
+
+3) Express backend
+
+```bash
+cd Express-backend
 npm install
-npm run dev   # or: node server.js
-
-## Troubleshooting
-If you get any errors, check the folder-specific README:
-  - `Express-backend/README.md`
+# copy or create a .env with at least MONGODB_URI and JWT_SECRET
+cp .env.example .env 2>/dev/null || true
+# edit .env to set MONGODB_URI (mongodb://localhost:27017/yourdb) and JWT_SECRET
+npm run dev
 ```
 
-– Python-backend
+4) Python backend
+
 ```bash
-python -m venv .venv
+cd Python-backend
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app:app --reload
-
-## Troubleshooting
-If you get any errors, check the folder-specific README:
-  - `Python-backend/README.md`
+cp .env.example .env 2>/dev/null || true
+# edit .env if necessary
+uvicorn app:app --reload --host 0.0.0.0 --port 8000
 ```
 
-sudo apt-get update
-sudo apt-get install -y build-essential python3
+5) Frontend
 
-# Set Python 3 as default for node-gyp
-npm config set python python3
-```
-
-### 3. Install Project Dependencies
 ```bash
-# Navigate to project directory
 cd Frontend
-
-# Clean previous installations (if any)
-rm -rf node_modules package-lock.json
-
-# Install dependencies
 npm install --legacy-peer-deps
+npm run dev
+# open http://localhost:3000
 ```
-## Troubleshooting
-If you get any errors, check the folder-specific README:
-  - `Frontend/README.md`
 
-## Ports and URLs (defaults)
-- Express API: http://localhost:3001 (or as defined in its README)
-- Python API:  http://127.0.0.1:8000
-- Frontend:     http://localhost:3000
+Common tips
+- If npm install fails with compilation errors, ensure build-essential is installed and that npm uses python3: `npm config set python python3`.
+- If you use Docker for MongoDB, make sure to update `MONGODB_URI` in backend .env files to point to `mongodb://host.docker.internal:27017/` on macOS/Windows or `mongodb://localhost:27017/` on Linux.
+- Use the dev seeder: `POST /api/tutor/seed-sample` to create sample tutor roadmap data (Express backend must be running).
+- Frontend reads API base URLs from `Frontend/.env` (VITE_API_URL and VITE_PY_API_URL).
 
-Ensure the Frontend config points to the running backend URLs.
+Troubleshooting
+- CORS errors: confirm backend and frontend ports and VITE_API_URL match and that backends allow the frontend origin.
+- Authentication redirect loops: check `JWT_SECRET` and token storage in localStorage.
 
+Files of interest
+- `Express-backend/scripts/generated_tutor_roadmap.json` — sample 8-chapter roadmap used by the dev seeder.
+- Frontend pages: `Frontend/src/pages/Community.jsx`, `Frontend/src/pages/Dashboard.jsx`, `Frontend/src/pages/Learning.jsx`, `Frontend/src/pages/ChapterDetail.jsx`.
 
-
-
-Also confirm env variables are set in the correct `.env` files and that MongoDB is running.
+If you want, I can add a small script to launch all services with docker-compose for an easier dev start.

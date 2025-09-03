@@ -141,13 +141,47 @@ const Dashboard = () => {
         setLoading(true)
         setError(null)
 
-        // Prefer analyticsAPI.getDashboard if available
+        // Prefer analyticsAPI.getDashboard if available. Normalize multiple shapes.
         let summary = null
         try {
           const resp = await analyticsAPI.getDashboard()
-          summary = resp?.data || resp || null
+
+          // resp can be:
+          // 1) { success: true, data: analytics } where analytics has moduleStats/overallProgress/activityTimeline
+          // 2) { success: true, summary: { ... } }
+          // 3) direct analytics object
+          if (!resp) {
+            summary = null
+          } else if (resp.summary) {
+            summary = resp.summary
+          } else if (resp.data && resp.data.summary) {
+            summary = resp.data.summary
+          } else if (resp.data && (resp.data.moduleStats || resp.data.overallProgress)) {
+            // Convert analytics -> dashboard summary (best-effort)
+            const analytics = resp.data
+            const overall = analytics.overallProgress || {}
+            summary = {
+              wellnessScoreToday: 0,
+              attentionToday: 0,
+              learningDistribution: {
+                completed: overall.completedModules || 0,
+                in_progress: Math.max(0, (overall.totalModules || 0) - (overall.completedModules || 0)),
+                not_started: 0,
+                total_modules: overall.totalModules || 0
+              },
+              streak: { current: 0, best: 0 },
+              achievements: [],
+              weeklyPerformance: (analytics.activityTimeline || []).map(a => ({ day: a.date || a.day || '', attention: Math.round(a.attention || 0), focus: Math.round(a.focus || 0) }))
+            }
+          } else if (resp.data) {
+            // If resp.data exists but doesn't match above shapes, try using it directly
+            summary = resp.data
+          } else {
+            // finally, try direct resp shape
+            summary = resp
+          }
         } catch (e) {
-          // fallback to direct endpoint
+          // fallback to direct consolidated endpoint
           try {
             const resp = await axios.get(`${API_URL}/api/analytics/dashboard-summary`)
             summary = resp.data?.summary || resp.data || null
@@ -160,7 +194,7 @@ const Dashboard = () => {
         let persistedWellness = null
         try {
           const dsResp = await wellnessAPI.getDailySummary().catch(() => null)
-          const s = dsResp?.summary ?? dsResp
+          const s = dsResp?.data?.summary ?? dsResp?.data ?? dsResp?.summary ?? dsResp
           if (s) {
             persistedWellness = s.wellness_score ?? (Array.isArray(s.last_seven_scores) && s.last_seven_scores.length > 0 ? s.last_seven_scores[0] : null)
           }
@@ -168,7 +202,7 @@ const Dashboard = () => {
           console.debug('Failed to load persisted wellness summary', e)
         }
 
-        // Key metrics with defaults
+  // Key metrics with defaults
         const wellnessScore = persistedWellness !== null ? Math.round(persistedWellness) : (Number.isFinite(summary?.wellnessScoreToday) ? Math.round(summary.wellnessScoreToday) : 0)
         const attentionLevel = Number.isFinite(summary?.attentionToday) ? Math.round(summary.attentionToday) : 0
 
@@ -184,18 +218,49 @@ const Dashboard = () => {
           { name: 'Not Started', value: notStartedPct, color: '#6B7280' }
         ])
 
+        // If analytics summary is missing, try a safe fallback from learningAPI.getStats
+        if (!summary) {
+          try {
+            const { learningAPI } = await import('../services/api')
+            const statsResp = await learningAPI.getStats()
+            const lp = statsResp?.data || statsResp || {}
+            // map fallback: try to get averageScore or modulesCompleted
+            const fallbackCompleted = lp.modulesCompleted ? Math.round((lp.modulesCompleted / Math.max(1, lp.totalModules || lp.modulesCompleted)) * 100) : Math.round(lp.averageScore || 0)
+            setLearningStats([
+              { name: 'Completed', value: fallbackCompleted, color: '#10B981' },
+              { name: 'In Progress', value: Math.max(0, 100 - fallbackCompleted - 0), color: '#3B82F6' },
+              { name: 'Not Started', value: 0, color: '#6B7280' }
+            ])
+            setUserData(prev => ({ ...prev, learningProgress: fallbackCompleted }))
+          } catch (e) {
+            // ignore fallback failure
+          }
+        }
+
         // Weekly performance mapping (default 7 days with zeros)
         const weekRaw = Array.isArray(summary?.weeklyPerformance) ? summary.weeklyPerformance : []
-        const ensure7 = (arr) => {
+        const mapToLast7 = (rawArr) => {
+          // Build map by ISO date string and by short weekday if provided
+          const map = new Map()
+          rawArr.forEach(item => {
+            const iso = item.day || item.date || item._id || ''
+            const key = iso.slice(0,10)
+            map.set(key, { attention: Math.round(item.attention || 0), focus: Math.round(item.focus || 0) })
+          })
+
           const out = []
-          const labels = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
-          for (let i = 0; i < 7; i++) {
-            const w = arr[i] || { day: new Date(Date.now() - ((6 - i) * 24 * 3600 * 1000)).toISOString(), attention: 0, focus: 0 }
-            out.push({ day: labels[i], attention: Math.round(w.attention || 0), focus: Math.round(w.focus || 0) })
+          for (let i = 6; i >= 0; i--) {
+            const d = new Date()
+            d.setDate(d.getDate() - i)
+            const iso = d.toISOString().slice(0,10)
+            const labels = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+            const label = labels[d.getDay()]
+            const val = map.get(iso) || { attention: 0, focus: 0 }
+            out.push({ day: label, attention: val.attention, focus: val.focus })
           }
           return out
         }
-        setWeeklyData(ensure7(weekRaw))
+        setWeeklyData(mapToLast7(weekRaw))
 
         // Streak and achievements
         const streakDays = summary?.streak?.current ?? 0

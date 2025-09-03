@@ -24,44 +24,9 @@ const Community = () => {
   const [showNewPostForm, setShowNewPostForm] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
 
-  const discussions = [
-    {
-      id: 1,
-      title: 'Tips for maintaining focus during long study sessions',
-      author: 'Sarah Chen',
-      avatar: '👩‍🎓',
-      content: 'I\'ve been using the Pomodoro technique combined with ACAWS attention tracking...',
-      likes: 24,
-      replies: 8,
-      timestamp: '2 hours ago',
-      category: 'Study Tips',
-      trending: true
-    },
-    {
-      id: 2,
-      title: 'How machine learning changed my understanding of AI',
-      author: 'Alex Rodriguez',
-      avatar: '👨‍💻',
-      content: 'After completing the ML fundamentals module, I finally understand how neural networks...',
-      likes: 18,
-      replies: 12,
-      timestamp: '4 hours ago',
-      category: 'Learning',
-      trending: false
-    },
-    {
-      id: 3,
-      title: 'Wellness Wednesday: Sharing breathing techniques',
-      author: 'Emma Thompson',
-      avatar: '🧘‍♀️',
-      content: 'The 4-7-8 breathing technique has been a game-changer for my stress levels...',
-      likes: 31,
-      replies: 15,
-      timestamp: '1 day ago',
-      category: 'Wellness',
-      trending: true
-    }
-  ]
+  const [discussions, setDiscussions] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
 
   const leaderboard = [
     { rank: 1, name: 'Jessica Park', points: 2850, avatar: '👩‍🔬', badge: '🏆' },
@@ -132,12 +97,81 @@ const Community = () => {
     { id: 'challenges', label: 'Challenges', icon: Target }
   ]
 
-  const handleNewPost = () => {
-    if (newPost.trim()) {
-      // Add new post logic here
-      console.log('New post:', newPost)
+  // API wiring
+  const loadDiscussions = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      // lazy import to avoid circular dependency during tests
+      const { communityAPI } = await import('../services/api')
+      const res = await communityAPI.getDiscussions()
+      setDiscussions(res?.data || res || [])
+    } catch (e) {
+      console.warn('Failed to load discussions, falling back to sample data', e.message)
+      // fallback sample data when API is not available
+      setDiscussions([
+        {
+          id: 1,
+          title: 'Tips for maintaining focus during long study sessions',
+          author: 'Sarah Chen',
+          avatar: '👩‍🎓',
+          content: "I've been using the Pomodoro technique combined with ACAWS attention tracking...",
+          likes: 24,
+          replies: 8,
+          timestamp: '2 hours ago',
+          category: 'Study Tips',
+          trending: true
+        }
+      ])
+      setError('Could not load discussions from server')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleNewPost = async () => {
+    if (!newPost.trim()) return
+    try {
+      const { communityAPI } = await import('../services/api')
+      const payload = { title: newPost.substring(0, 120), content: newPost }
+      const res = await communityAPI.createDiscussion(payload)
+      // prefer server response but gracefully append created item
+      const created = res?.data || res || { id: Date.now(), title: payload.title, content: payload.content, author: 'You', avatar: '🙋' }
+      setDiscussions((d) => [created, ...d])
       setNewPost('')
       setShowNewPostForm(false)
+    } catch (e) {
+      console.warn('Failed to create discussion', e.message)
+      // local fallback
+      const created = { id: Date.now(), title: newPost.substring(0, 120), content: newPost, author: 'You', avatar: '🙋', likes: 0, replies: 0, timestamp: 'just now' }
+      setDiscussions((d) => [created, ...d])
+      setNewPost('')
+      setShowNewPostForm(false)
+    }
+  }
+
+  const handleLike = async (discussionId) => {
+    try {
+      const { communityAPI } = await import('../services/api')
+      await communityAPI.likeDiscussion(discussionId)
+      setDiscussions((d) => d.map(item => item.id === discussionId ? { ...item, likes: (item.likes || 0) + 1 } : item))
+    } catch (e) {
+      console.warn('Like failed, applying optimistic update', e.message)
+      setDiscussions((d) => d.map(item => item.id === discussionId ? { ...item, likes: (item.likes || 0) + 1 } : item))
+    }
+  }
+
+  const handleReply = async (discussionId, replyText) => {
+    if (!replyText || !replyText.trim()) return
+    try {
+      const { communityAPI } = await import('../services/api')
+      const res = await communityAPI.addReply(discussionId, { text: replyText })
+      // optimistic: increment replies count
+      setDiscussions((d) => d.map(item => item.id === discussionId ? { ...item, replies: (item.replies || 0) + 1 } : item))
+      return res
+    } catch (e) {
+      console.warn('Reply failed, applying optimistic update', e.message)
+      setDiscussions((d) => d.map(item => item.id === discussionId ? { ...item, replies: (item.replies || 0) + 1 } : item))
     }
   }
 
@@ -180,10 +214,10 @@ const Community = () => {
           </div>
         </div>
 
-        {/* Tab Content */}
+    {/* Tab Content */}
         <div className="grid lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2">
-            {activeTab === 'discussions' && (
+      {activeTab === 'discussions' && (
               <motion.div
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -259,7 +293,11 @@ const Community = () => {
 
                 {/* Discussion Posts */}
                 <div className="space-y-4">
-                  {discussions.map((discussion) => (
+                  {loading && <div className="p-6 bg-white dark:bg-gray-800 rounded-2xl">Loading discussions...</div>}
+                  {!loading && discussions.length === 0 && (
+                    <div className="p-6 bg-white dark:bg-gray-800 rounded-2xl">No discussions yet — be the first to post.</div>
+                  )}
+                  {!loading && discussions.map((discussion) => (
                     <motion.div
                       key={discussion.id}
                       initial={{ opacity: 0, y: 20 }}
@@ -268,7 +306,7 @@ const Community = () => {
                     >
                       <div className="flex items-start space-x-4">
                         <div className="w-12 h-12 bg-gradient-to-br from-primary-400 to-secondary-500 rounded-full flex items-center justify-center text-white text-xl">
-                          {discussion.avatar}
+                          {discussion.avatar || '👤'}
                         </div>
                         <div className="flex-1">
                           <div className="flex items-center space-x-2 mb-2">
@@ -286,20 +324,22 @@ const Community = () => {
                           </p>
                           <div className="flex items-center justify-between">
                             <div className="flex items-center space-x-4 text-sm text-gray-500 dark:text-gray-400">
-                              <span>by {discussion.author}</span>
-                              <span>{discussion.timestamp}</span>
-                              <span className="px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded-full text-xs">
-                                {discussion.category}
-                              </span>
+                              <span>by {discussion.author || 'Unknown'}</span>
+                              <span>{discussion.timestamp || ''}</span>
+                              {discussion.category && (
+                                <span className="px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded-full text-xs">
+                                  {discussion.category}
+                                </span>
+                              )}
                             </div>
                             <div className="flex items-center space-x-4">
-                              <button className="flex items-center space-x-1 text-gray-500 hover:text-red-500 transition-colors">
+                              <button onClick={() => handleLike(discussion.id)} className="flex items-center space-x-1 text-gray-500 hover:text-red-500 transition-colors">
                                 <ThumbsUp className="w-4 h-4" />
-                                <span>{discussion.likes}</span>
+                                <span>{discussion.likes || 0}</span>
                               </button>
                               <button className="flex items-center space-x-1 text-gray-500 hover:text-blue-500 transition-colors">
                                 <MessageCircle className="w-4 h-4" />
-                                <span>{discussion.replies}</span>
+                                <span>{discussion.replies || 0}</span>
                               </button>
                               <button className="text-gray-500 hover:text-green-500 transition-colors">
                                 <Share2 className="w-4 h-4" />

@@ -45,6 +45,7 @@ const EnhancedCameraAnalysis = ({
   const [realTimeInsights, setRealTimeInsights] = useState([])
   const [consentGiven, setConsentGiven] = useState(false)
   const [enhancedSummary, setEnhancedSummary] = useState(null)
+  const [isSimulated, setIsSimulated] = useState(false)
   // In-component console for quick visibility of captures/results
   const [consoleLogs, setConsoleLogs] = useState([])
   const [submitCount, setSubmitCount] = useState(0)
@@ -272,14 +273,29 @@ const EnhancedCameraAnalysis = ({
         console.log('🔍 [Component] Skipping enhanced analysis (onDeviceOnly mode)')
       }
 
-      const [emotionResult, attentionResult, fatigueResult] = await Promise.allSettled(tasks)
+  const [emotionResult, attentionResult, fatigueResult] = await Promise.allSettled(tasks)
 
       const processingTime = Date.now() - startTime
 
       // Process results
-      const emotion = emotionResult.status === 'fulfilled' ? emotionResult.value : null
-      const attention = attentionResult.status === 'fulfilled' ? attentionResult.value : null
-      const fatigue = fatigueResult.status === 'fulfilled' ? fatigueResult.value : null
+      let emotion = emotionResult.status === 'fulfilled' ? emotionResult.value : null
+      let attention = attentionResult.status === 'fulfilled' ? attentionResult.value : null
+      let fatigue = fatigueResult.status === 'fulfilled' ? fatigueResult.value : null
+
+      // If remote services did not return real metrics but camera is enabled, generate
+      // plausible-looking simulated metrics locally so the UI stays informative.
+      const shouldSimulate = (!enhancedSummary) && (!emotion && !attention && !fatigue) && webcamRef.current && consentGiven
+      if (shouldSimulate) {
+        const simulated = generateSimulatedMetrics()
+        emotion = simulated.emotion
+        attention = simulated.attention
+        fatigue = simulated.fatigue
+        setIsSimulated(true)
+        logToConsole('Using simulated cognitive metrics (offline mode)')
+      } else {
+        // if real values arrived, ensure simulation flag is cleared
+        if (emotion || attention || fatigue || enhancedSummary) setIsSimulated(false)
+      }
 
       // Set enhanced summary if available
       if (enhancedSummary) {
@@ -542,6 +558,44 @@ const EnhancedCameraAnalysis = ({
     return insights
   }
 
+  // Small helper that returns plausible-looking cognitive metrics when offline.
+  function generateSimulatedMetrics() {
+    const t = Date.now() / 1000
+    const rnd = (min, max) => {
+      // smooth pseudo-random around a sinusoid so values change slowly
+      const base = 0.5 + 0.5 * Math.sin(t / 6 + (Math.random() - 0.5))
+      return Math.round((min + (max - min) * base) * 100) / 100
+    }
+
+    const attention = {
+      attentionScore: rnd(45, 95),
+      engagementLevel: rnd(0.3, 0.95),
+      attentionConfidence: rnd(0.65, 0.98),
+      gazeAnalysis: { confidence: rnd(0.6, 0.98), coordinates: { x: (Math.random() - 0.5), y: (Math.random() - 0.5) } },
+      cognitiveLoad: { level: rnd(0.1, 0.7) }
+    }
+
+    const emotion = {
+      emotions: {
+        neutral: Math.random() * 0.4 + 0.2,
+        happy: Math.random() * 0.5,
+        confused: Math.random() * 0.4,
+        sad: Math.random() * 0.3
+      },
+      confidence: rnd(0.6, 0.97),
+      advancedMetrics: { emotionalStability: rnd(0.4, 0.95) },
+      microExpressions: []
+    }
+
+    const fatigue = {
+      fatigueScore: rnd(0, 60),
+      blinkRate: rnd(5, 20),
+      confidence: rnd(0.5, 0.9)
+    }
+
+    return { attention, emotion, fatigue }
+  }
+
   const updateAdvancedMetrics = (emotion, attention, fatigue) => {
     setAdvancedMetrics(prev => ({
       microExpressions: [
@@ -775,6 +829,11 @@ const EnhancedCameraAnalysis = ({
               <span className="text-sm text-gray-600 dark:text-gray-400">
                 {isActive && !error ? 'Active' : 'Inactive'}
               </span>
+                {isSimulated && (
+                  <span className="ml-2 inline-block text-xs text-yellow-700 bg-yellow-100 dark:bg-yellow-900/30 dark:text-yellow-300 px-2 py-0.5 rounded-full">
+                    Simulated (offline)
+                  </span>
+                )}
             </div>
             <div className="ml-4 text-xs text-gray-500 dark:text-gray-300">
               <div>Submits: <strong>{submitCount}</strong></div>
