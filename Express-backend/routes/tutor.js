@@ -170,6 +170,37 @@ router.post('/quizzes', async (req, res) => {
   }
 })
 
+// Ask AI teacher to teach a chapter (server-side prompt)
+router.post('/teach', async (req, res) => {
+  try {
+    const { roadmap_id, chapter_id, user_context = {} } = req.body || {}
+    if (!roadmap_id || !chapter_id) return res.status(400).json({ ok: false, error: 'roadmap_id and chapter_id required' })
+
+    const roadmap = await tutorService.getRoadmap(roadmap_id)
+    const chapter = await tutorService.getChapter ? await tutorService.getChapter(chapter_id) : (roadmap && roadmap.chapters ? roadmap.chapters.find(c => (c._id || c.id || c).toString() === chapter_id.toString()) : null)
+
+    if (!roadmap || !chapter) return res.status(404).json({ ok: false, error: 'roadmap or chapter not found' })
+
+    // Build a teacher-style prompt: ask the assistant to teach this chapter,
+    // adapt to user_context (knowledge level, recent mistakes) and provide:
+    // 1) short explanation, 2) 3 quick examples, 3) 2 practice questions with answers, 4) suggested next steps
+    const prompt = `You are an expert teacher. Teach the chapter titled "${chapter.title}" from roadmap "${roadmap.title}". Chapter content: ${chapter.content || chapter.summary || ''}. Adapt your explanation to the following user context: ${JSON.stringify(user_context)}. Provide: a concise explanation (3-5 sentences), three brief worked examples, two practice questions with answers, and suggested next steps. Output only JSON with keys: explanation, examples (array), practice_questions (array of {question, answer}), next_steps (array).`
+
+    const out = await sendPrompt({ prompt, model: 'gemini-pro', systemInstruction: 'You are a helpful teacher.' })
+    // Try to extract JSON
+    const jsonMatch = out.text && out.text.match(/\{[\s\S]*\}/)
+    let parsed = null
+    if (jsonMatch) {
+      try { parsed = JSON.parse(jsonMatch[0]) } catch (e) { /* ignore parse error */ }
+    }
+
+    res.json({ ok: true, data: parsed || { raw: out.text } })
+  } catch (err) {
+    console.error('POST /tutor/teach', err)
+    res.status(500).json({ ok: false, error: 'teaching generation failed' })
+  }
+})
+
 // Submit quiz result
 router.post('/quizzes/:quizId/submit', async (req, res) => {
   try {

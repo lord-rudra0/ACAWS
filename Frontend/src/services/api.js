@@ -436,6 +436,15 @@ tutorAPI.generateRoadmap = async (opts = {}) => {
   }
 }
 
+tutorAPI.askTeacher = async (roadmapId, chapterId, userContext = {}) => {
+  try {
+    const response = await expressAPI.post('/api/tutor/teach', { roadmap_id: roadmapId, chapter_id: chapterId, user_context: userContext })
+    return response.data
+  } catch (err) {
+    throw new Error(err.message || 'Failed to ask teacher')
+  }
+}
+
 export const wellnessAPI = {
   recordEntry: async (entryData) => {
     try {

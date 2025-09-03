@@ -6,6 +6,7 @@ import mongoose from 'mongoose'
 import LearningModule from '../models/LearningModule.js'
 import tutorService from '../services/tutorService.js'
 import LearningSession from '../models/LearningSession.js'
+import LearningDebugLog from '../models/LearningDebugLog.js'
 
 const router = express.Router()
 
@@ -298,6 +299,118 @@ router.post('/predictions', asyncHandler(async (req, res) => {
   await sessionDoc.save()
 
   res.json({ success: true, prediction: prediction })
+}))
+
+// Dev debug: render raw LearningModule documents in a styled HTML view and log access
+router.get('/modules/debug', asyncHandler(async (req, res) => {
+  // allow basic query filters for convenience
+  const { category = '', difficulty = '', search = '' } = req.query
+
+  const filter = {}
+  if (category) filter.category = category
+  if (difficulty) filter.difficulty = difficulty
+  if (search) filter.$or = [
+    { title: { $regex: search, $options: 'i' } },
+    { description: { $regex: search, $options: 'i' } }
+  ]
+
+  const modules = await LearningModule.find(filter).sort({ difficulty: 1, created_at: 1 })
+
+  // store a debug access log (important things persisted)
+  try {
+    await LearningDebugLog.create({
+      user_id: req.user?.id || null,
+      ip: req.ip,
+      path: req.originalUrl,
+      params: req.query || {},
+      user_agent: req.get('User-Agent') || '',
+      notes: `Rendered modules debug view (${modules.length} modules)`
+    })
+  } catch (e) {
+    console.warn('Failed to write LearningDebugLog', e)
+  }
+
+  // also show recent debug logs so developers can see important persisted info
+  const recentLogs = await LearningDebugLog.find({}).sort({ createdAt: -1 }).limit(30)
+
+  // small helper
+  const escapeHtml = (str) => {
+    if (str === null || str === undefined) return ''
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;')
+  }
+
+  const moduleRows = modules.map(m => {
+    return `
+      <div class="module-card">
+        <div class="module-header"><strong>${escapeHtml(m.title)}</strong> <span class="muted">(${escapeHtml(m._id)})</span></div>
+        <div class="module-meta">${escapeHtml(m.category || '')} • ${escapeHtml(m.difficulty || '')} • ${escapeHtml(m.duration || '')} min</div>
+        <div class="module-desc">${escapeHtml(m.description || '')}</div>
+        <pre class="module-json">${escapeHtml(JSON.stringify(m.toObject ? m.toObject() : m, null, 2))}</pre>
+      </div>
+    `
+  }).join('\n')
+
+  const logRows = recentLogs.map(l => `
+    <tr>
+      <td>${escapeHtml(String(l._id))}</td>
+      <td>${escapeHtml(String(l.user_id || 'anon'))}</td>
+      <td>${escapeHtml(l.ip || '')}</td>
+      <td>${escapeHtml(JSON.stringify(l.params || {}))}</td>
+      <td>${escapeHtml(l.notes || '')}</td>
+      <td>${escapeHtml(new Date(l.createdAt).toLocaleString())}</td>
+    </tr>
+  `).join('')
+
+  const html = `<!doctype html>
+  <html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Learning Modules — Debug</title>
+    <style>
+      body { font-family: Inter, system-ui, -apple-system, Roboto, 'Segoe UI', Arial; background:#f7fafc; color:#0f172a; padding:20px }
+      h1 { margin:0 0 12px 0 }
+      .muted { color:#64748b; font-size:12px }
+      .module-card { background: white; border-radius:8px; padding:12px; margin-bottom:12px; box-shadow:0 1px 2px rgba(2,6,23,0.06) }
+      .module-header { font-size:16px; margin-bottom:6px }
+      .module-meta { color:#475569; font-size:13px; margin-bottom:8px }
+      .module-desc { margin-bottom:8px }
+      .module-json { background:#0f172a; color:#f8fafc; padding:10px; border-radius:6px; overflow:auto; max-height:260px }
+      table.logs { width:100%; border-collapse:collapse; margin-top:18px }
+      table.logs th, table.logs td { border:1px solid #e2e8f0; padding:8px; text-align:left; font-size:13px }
+      .controls { margin-bottom:12px }
+      .badge { display:inline-block; background:#e2e8f0; padding:4px 8px; border-radius:999px; font-size:12px; margin-right:6px }
+    </style>
+  </head>
+  <body>
+    <h1>Learning Modules — Debug</h1>
+    <div class="controls">
+      <span class="badge">Modules: ${modules.length}</span>
+      <span class="badge">Recent logs: ${recentLogs.length}</span>
+    </div>
+    <div id="modules-list">
+      ${moduleRows}
+    </div>
+
+    <h2>Recent Debug Logs</h2>
+    <table class="logs">
+      <thead>
+        <tr><th>id</th><th>user</th><th>ip</th><th>params</th><th>notes</th><th>time</th></tr>
+      </thead>
+      <tbody>
+        ${logRows}
+      </tbody>
+    </table>
+  </body>
+  </html>`
+
+  res.set('Content-Type', 'text/html; charset=utf-8')
+  res.send(html)
 }))
 
 // Get learning recommendations

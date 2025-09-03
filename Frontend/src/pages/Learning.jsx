@@ -69,6 +69,9 @@ const Learning = () => {
   const [selectedChapter, setSelectedChapter] = useState(null)
   const [activeQuiz, setActiveQuiz] = useState(null)
   const [userId] = useState(() => localStorage.getItem('user_id') || null)
+  const [teachingModalOpen, setTeachingModalOpen] = useState(false)
+  const [teachingContent, setTeachingContent] = useState(null)
+  const [teachingLoading, setTeachingLoading] = useState(false)
   
   // State for performance tracking
   const [performanceHistory, setPerformanceHistory] = useState([])
@@ -490,6 +493,21 @@ const Learning = () => {
                     <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">{selectedRoadmap.title}</h3>
                     <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">{selectedRoadmap.description}</p>
                     <Chapter chapter={selectedChapter || (selectedRoadmap.chapters && selectedRoadmap.chapters[0])} onStartQuiz={(ch) => setActiveQuiz((ch.quizzes && ch.quizzes[0]) || null)} />
+                    <div className="mt-4">
+                      <button className="btn-primary mr-2" onClick={async () => {
+                        if (!selectedRoadmap || !selectedChapter) return alert('Select a chapter first')
+                        setTeachingLoading(true)
+                        setTeachingModalOpen(true)
+                        try {
+                          const resp = await tutorAPI.askTeacher(selectedRoadmap._id || selectedRoadmap.id, selectedChapter._id || selectedChapter.id, { user_id: userId })
+                          setTeachingContent(resp.data || resp)
+                        } catch (e) {
+                          setTeachingContent({ error: e.message || 'Failed to fetch teaching content' })
+                        } finally {
+                          setTeachingLoading(false)
+                        }
+                      }}>Ask Teacher</button>
+                    </div>
                   </div>
                   <div>
                     <Roadmap roadmap={selectedRoadmap} onSelectChapter={(ch) => setSelectedChapter(ch)} selectedChapterId={selectedChapter?._id || selectedChapter?.id} />
@@ -668,6 +686,62 @@ const Learning = () => {
           </div>
         </div>
       </div>
+      {/* Teaching Modal */}
+      {teachingModalOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg max-w-3xl w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold">AI Teacher</h3>
+              <button onClick={() => { setTeachingModalOpen(false); setTeachingContent(null) }} className="text-sm text-gray-500">Close</button>
+            </div>
+            {teachingLoading ? (
+              <div>Generating...</div>
+            ) : teachingContent ? (
+              <div className="space-y-4 text-sm text-gray-800 dark:text-gray-200">
+                {teachingContent.error && <div className="text-red-600">{teachingContent.error}</div>}
+                {teachingContent.explanation && <div><strong>Explanation</strong><p>{teachingContent.explanation}</p></div>}
+                {Array.isArray(teachingContent.examples) && (
+                  <div>
+                    <strong>Examples</strong>
+                    <ul className="list-disc pl-5">
+                      {teachingContent.examples.map((ex, i) => <li key={i}>{ex}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {Array.isArray(teachingContent.practice_questions) && (
+                  <div>
+                    <strong>Practice Questions</strong>
+                    <ol className="pl-5 list-decimal">
+                      {teachingContent.practice_questions.map((q, i) => (
+                        <li key={i} className="mb-2">
+                          <div className="font-medium">{q.question}</div>
+                          <div className="text-sm text-gray-600">Answer: {q.answer}</div>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+                {Array.isArray(teachingContent.next_steps) && (
+                  <div>
+                    <strong>Next Steps</strong>
+                    <ul className="list-disc pl-5">
+                      {teachingContent.next_steps.map((s, i) => <li key={i}>{s}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {teachingContent.raw && (
+                  <div>
+                    <strong>Raw</strong>
+                    <pre className="text-xs bg-gray-100 dark:bg-gray-900 p-2 rounded">{teachingContent.raw}</pre>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div>No content yet</div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
