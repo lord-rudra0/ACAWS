@@ -436,6 +436,16 @@ tutorAPI.generateRoadmap = async (opts = {}) => {
   }
 }
 
+// Dev helper: seed a small sample roadmap (calls backend dev-only seeder)
+tutorAPI.seedSample = async () => {
+  try {
+    const response = await expressAPI.post('/api/tutor/seed-sample')
+    return response.data
+  } catch (err) {
+    throw new Error(err.message || 'Failed to seed sample roadmap')
+  }
+}
+
 tutorAPI.askTeacher = async (roadmapId, chapterId, userContext = {}) => {
   try {
     const response = await expressAPI.post('/api/tutor/teach', { roadmap_id: roadmapId, chapter_id: chapterId, user_context: userContext })

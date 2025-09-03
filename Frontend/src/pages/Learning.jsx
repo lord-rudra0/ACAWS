@@ -481,11 +481,21 @@ const Learning = () => {
                   const gen = await tutorAPI.generateRoadmap(payload)
                   if (gen && gen.data && gen.data.roadmap) {
                     const newRd = gen.data.roadmap
+                    // Fetch populated roadmap from server (chapters & quizzes populated)
+                    let populated = null
+                    try {
+                      const got = await tutorAPI.getRoadmap(newRd._id || newRd.id)
+                      populated = (got && got.data) ? got.data : null
+                    } catch (e) {
+                      populated = null
+                    }
+
+                    const useRd = populated || newRd
                     // Ensure generated roadmap is visible immediately (works for anonymous and logged-in users)
-                    setSelectedRoadmap(newRd)
-                    try { localStorage.setItem('acaws.lastRoadmap', JSON.stringify(newRd)) } catch (e) {}
-                    // set the first chapter as selected if available
-                    const firstCh = (newRd.chapters && newRd.chapters[0]) || null
+                    setSelectedRoadmap(useRd)
+                    try { localStorage.setItem('acaws.lastRoadmap', JSON.stringify(useRd)) } catch (e) {}
+                    // set the first chapter as selected if available and ensure it's an object
+                    const firstCh = (useRd.chapters && useRd.chapters[0]) || null
                     setSelectedChapter(firstCh)
                     setActiveQuiz((firstCh && firstCh.quizzes && firstCh.quizzes[0]) || null)
                     // Refresh list so roadmap picker shows the new item
@@ -551,6 +561,36 @@ const Learning = () => {
             {/* Current Module / Chapter Display */}
             {selectedRoadmap && (
               <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6">
+                {/* Guard: if roadmap has no chapters, show seed button for dev */}
+                {Array.isArray(selectedRoadmap.chapters) && selectedRoadmap.chapters.length === 0 && (
+                  <div className="py-6 text-center">
+                    <div className="text-lg font-semibold text-gray-900 dark:text-white">This roadmap has no chapters yet</div>
+                    <div className="text-sm text-gray-600 dark:text-gray-400 mt-2">You can seed a sample roadmap to test the UI.</div>
+                    <div className="mt-4">
+                      <button className="btn-primary" onClick={async () => {
+                        try {
+                          const seeded = await tutorAPI.seedSample()
+                          if (seeded && seeded.data && seeded.data.roadmap) {
+                            // try to fetch populated roadmap
+                            const id = seeded.data.roadmap._id || seeded.data.roadmap.id
+                            try {
+                              const got = await tutorAPI.getRoadmap(id)
+                              if (got && got.data) setSelectedRoadmap(got.data)
+                            } catch (e) {
+                              // fallback to returned roadmap
+                              setSelectedRoadmap(seeded.data.roadmap)
+                            }
+                            // refresh list
+                            try { loadRoadmaps() } catch (e) {}
+                          }
+                        } catch (e) {
+                          console.error('Seeding sample roadmap failed', e)
+                          alert('Failed to seed sample roadmap: ' + (e.message || e))
+                        }
+                      }}>Seed Sample Roadmap</button>
+                    </div>
+                  </div>
+                )}
                 <div className="grid grid-cols-3 gap-4">
                   <div className="col-span-2">
                     <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">{selectedRoadmap.title}</h3>
@@ -573,7 +613,15 @@ const Learning = () => {
                     </div>
                   </div>
                   <div>
-                    <Roadmap roadmap={selectedRoadmap} onSelectChapter={(ch) => setSelectedChapter(ch)} selectedChapterId={selectedChapter?._id || selectedChapter?.id} />
+                    <Roadmap roadmap={selectedRoadmap} onSelectChapter={(ch) => {
+                      // ch may be either a chapter object or an id string; normalize to object
+                      if (!ch) return setSelectedChapter(null)
+                      if (typeof ch === 'string') {
+                        const found = (selectedRoadmap.chapters || []).find(c => c.id === ch || c._id === ch || c.id === c._id && (c._id === ch))
+                        return setSelectedChapter(found || null)
+                      }
+                      setSelectedChapter(ch)
+                    }} selectedChapterId={selectedChapter?._id || selectedChapter?.id} />
                   </div>
                 </div>
               </div>

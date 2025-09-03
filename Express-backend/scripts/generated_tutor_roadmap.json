@@ -1,0 +1,93 @@
+{
+  "title": "Science — 10th Grade (Beginner)",
+  "description": "A beginner-friendly roadmap for 10th grade science covering core concepts in Physics, Chemistry, and Biology with activities and short quizzes for each chapter.",
+  "author": null,
+  "active": true,
+  "meta": {
+    "source": "generated",
+    "difficulty": "beginner",
+    "chapters_count": 8
+  },
+  "chapters": [
+    {
+      "title": "Matter and Its Properties",
+      "content": "<h4>Overview</h4><p>Understand states of matter, classifications, and physical vs chemical properties.</p><ul><li>States of matter: solid, liquid, gas</li><li>Physical vs chemical properties</li><li>Elements, compounds, mixtures</li><li>Physical and chemical changes</li></ul>",
+      "position": 1,
+      "resources": ["Simple home experiments: melting/freezing, dissolving salt/sugar", "Short video: physical vs chemical changes"],
+      "quizzes": [
+        { "question": "What is the difference between a physical change and a chemical change?", "answer": "Physical change alters form without changing composition; chemical change forms one or more new substances." },
+        { "question": "Give an example of a mixture and how you would separate its components.", "answer": "Salt + sand — add water to dissolve salt, filter sand, then evaporate water to recover salt." }
+      ]
+    },
+    {
+      "title": "Atomic Structure and Periodic Table",
+      "content": "<h4>Overview</h4><p>Learn basic atomic structure and how the periodic table is organized.</p><ul><li>Atom: nucleus, protons, neutrons, electrons</li><li>Atomic number and mass number</li><li>Periodic table groups and periods</li><li>Metals, non-metals, metalloids</li></ul>",
+      "position": 2,
+      "resources": ["Model kit or paper atom models", "Periodic table chart"],
+      "quizzes": [
+        { "question": "What particles are found in the nucleus of an atom?", "answer": "Protons and neutrons." },
+        { "question": "What determines the element's atomic number?", "answer": "The number of protons." }
+      ]
+    },
+    {
+      "title": "Chemical Reactions and Equations",
+      "content": "<h4>Overview</h4><p>Understand basic types of chemical reactions and how to write simple chemical equations.</p><ul><li>Reactants and products</li><li>Types: combination, decomposition, displacement</li><li>Conservation of mass and balancing equations</li></ul>",
+      "position": 3,
+      "resources": ["Guided lab: vinegar + baking soda reaction", "Worksheet: balancing equations"],
+      "quizzes": [
+        { "question": "Balance: H2 + O2 → H2O", "answer": "2 H2 + O2 → 2 H2O" },
+        { "question": "Name a type of reaction where two substances combine to form one.", "answer": "Combination reaction." }
+      ]
+    },
+    {
+      "title": "Force and Motion (Basics)",
+      "content": "<h4>Overview</h4><p>Grasp basic ideas of force, motion, speed, and inertia.</p><ul><li>Speed vs velocity vs acceleration (intro)</li><li>Balanced and unbalanced forces</li><li>Newton's first law (inertia)</li><li>Friction basics</li></ul>",
+      "position": 4,
+      "resources": ["Ramp experiments and timing", "Inertia demonstrations (coin/card experiment)"],
+      "quizzes": [
+        { "question": "What is inertia?", "answer": "The tendency of an object to resist changes in motion." },
+        { "question": "If a car moves at constant speed in a straight line, the net force is: ", "answer": "Zero." }
+      ]
+    },
+    {
+      "title": "Energy and Its Forms",
+      "content": "<h4>Overview</h4><p>Identify different forms of energy and basic conservation ideas.</p><ul><li>Kinetic and potential energy</li><li>Heat, light, sound, electrical energy (overview)</li><li>Energy transformations</li></ul>",
+      "position": 5,
+      "resources": ["Pendulum and energy conversion demo", "Simple circuit kit"],
+      "quizzes": [
+        { "question": "Give an example of an energy transformation.", "answer": "Battery chemical → electrical → light in a bulb." },
+        { "question": "Which form of energy depends on motion?", "answer": "Kinetic energy." }
+      ]
+    },
+    {
+      "title": "Cell Biology and Organisms",
+      "content": "<h4>Overview</h4><p>Understand basic cell structure and organization of life.</p><ul><li>Cell: basic unit, organelles</li><li>Plant vs animal cells</li><li>Tissues, organs, organ systems</li><li>Photosynthesis (overview)</li></ul>",
+      "position": 6,
+      "resources": ["Microscope slides (onion/leaf)", "Photosynthesis demonstration instructions"],
+      "quizzes": [
+        { "question": "Name two organelles found in plant cells but not animal cells.", "answer": "Chloroplasts and cell wall." },
+        { "question": "Where does photosynthesis occur?", "answer": "In chloroplasts of plant cells." }
+      ]
+    },
+    {
+      "title": "Ecosystems and Environment",
+      "content": "<h4>Overview</h4><p>Learn interactions in ecosystems and basic conservation principles.</p><ul><li>Food chains/webs</li><li>Producers, consumers, decomposers</li><li>Habitats and biodiversity</li><li>Human impact</li></ul>",
+      "position": 7,
+      "resources": ["Local biodiversity observation activity", "Food chain diagram worksheet"],
+      "quizzes": [
+        { "question": "What is a producer in a food chain?", "answer": "An organism that makes its own food (e.g., plants)." },
+        { "question": "Give one human activity that can harm biodiversity.", "answer": "Deforestation, pollution, overfishing." }
+      ]
+    },
+    {
+      "title": "Practical Lab Skills & Revision",
+      "content": "<h4>Overview</h4><p>Consolidate lab safety, measurement, and data recording skills; quick revision of key ideas.</p><ul><li>Lab safety and instruments (balance, thermometer)</li><li>Recording observations and basic graphs</li><li>Revision exercises</li></ul>",
+      "position": 8,
+      "resources": ["Lab safety checklist", "Sample lab exercise (density measurement)"],
+      "quizzes": [
+        { "question": "What is the correct unit for mass?", "answer": "Kilograms or grams." },
+        { "question": "Why is it important to repeat experiments?", "answer": "To confirm results and reduce random error." }
+      ]
+    }
+  ]
+}

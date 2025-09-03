@@ -11,7 +11,8 @@ const Chapter = ({ chapter, onStartQuiz }) => {
         <div dangerouslySetInnerHTML={{ __html: chapter.content || '<p>No content yet</p>' }} />
       </div>
       <div className="flex items-center space-x-3">
-        <button onClick={() => onStartQuiz(ch)} className="btn-primary">Take Quiz</button>
+        {/* ensure we pass the provided chapter object to onStartQuiz */}
+        <button onClick={() => onStartQuiz(chapter)} className="btn-primary">Take Quiz</button>
         <button className="btn-secondary">Mark as Read</button>
       </div>
     </motion.div>
