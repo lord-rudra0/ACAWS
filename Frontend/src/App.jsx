@@ -64,7 +64,7 @@ function App() {
               <ErrorBoundary>
                 <Suspense fallback={<LoadingSpinner />}>
                   <Routes>
-                    <Route path="/" element={<Home />} />
+                    <Route path="/" element={user ? <Navigate to="/dashboard" /> : <Home />} />
                     <Route 
                       path="/login" 
                       element={user ? <Navigate to="/dashboard" /> : <Login />} 

@@ -651,6 +651,20 @@ export const userAPI = {
   }
 }
 
+// Achievement persistence helper
+export const achievementAPI = {
+  persistUserAchievements: async (userId, achievements = []) => {
+    try {
+      const response = await expressAPI.post('/api/users/me/achievements', { user_id: userId, achievements })
+      return response.data
+    } catch (err) {
+      // graceful fallback: return the payload without erroring so frontend can continue
+      console.debug('persistUserAchievements failed (may be unsupported):', err.message)
+      return { ok: false, error: err.message, data: { user_id: userId, achievements } }
+    }
+  }
+}
+
 export const communityAPI = {
   getDiscussions: async (filters = {}) => {
     try {
